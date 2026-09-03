@@ -1,0 +1,158 @@
+order:
+  customer_tier:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Assign a deterministic tier from the source record identifier."
+  order_value_usd:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate a deterministic order value; do not confuse shipping cost with order value."
+  original_promise_dt:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from shipment_date using the documented service-level promise rule."
+  target_delivery_dt:
+    provenance: DERIVED
+    source_field: payload.rates[0].estimated_days
+    rule: "Add the selected rate estimated_days to original_promise_dt."
+  estimated_delivery_dt:
+    provenance: DERIVED
+    source_field: payload.shipment_date
+    rule: "Add the selected rate estimated_days to shipment_date."
+  order_priority:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Assign priority deterministically from customer_tier and order_value_usd."
+  sla_health:
+    provenance: DERIVED
+    source_field: null
+    rule: "Compare estimated_delivery_dt with target_delivery_dt."
+
+shipment:
+  tracking_number:
+    provenance: API-SOURCED
+    source_field: payload.tracking_number
+    rule: "Populate from a successful Shippo transaction response; absent from the shipment response."
+  dwell_time_sigma:
+    provenance: DERIVED
+    source_field: null
+    rule: "Calculate from observed facility dwell duration after tracking events are available."
+  arrival_eta:
+    provenance: DERIVED
+    source_field: payload.rates[0].estimated_days
+    rule: "Calculate from the shipment date and selected rate estimated_days."
+
+facility:
+  facility_type:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Assign a facility type from the origin or destination role."
+  facility_name:
+    provenance: SYNTHETIC
+    source_field: payload.address_from.name
+    rule: "Use a deterministic facility name generated from the origin address."
+  region_id:
+    provenance: SYNTHETIC
+    source_field: payload.address_from.state
+    rule: "Generate a stable region identifier from the origin country and state."
+  geo_point:
+    lat:
+      provenance: API-SOURCED
+      source_field: payload.address_from.latitude
+      rule: "Use Shippo's validated origin latitude when provided."
+    lon:
+      provenance: API-SOURCED
+      source_field: payload.address_from.longitude
+      rule: "Use Shippo's validated origin longitude when provided."
+  throughput_z:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate deterministically from the facility identifier and documented benchmark parameters."
+  status_flag:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Assign from the deterministic facility operating-status rule."
+
+carrier:
+  carrier_name:
+    provenance: API-SOURCED
+    source_field: payload.rates[0].provider
+    rule: "Use the provider from the selected Shippo rate."
+  reliability_idx:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from the carrier benchmark table; do not represent it as Shippo data."
+  cost_volatility:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from the carrier benchmark table; do not represent it as Shippo data."
+
+delivery_partner:
+  partner_name:
+    provenance: API-SOURCED
+    source_field: payload.rates[0].provider
+    rule: "Use the selected Shippo rate provider as the delivery partner proxy."
+  partner_display_name:
+    provenance: API-SOURCED
+    source_field: payload.rates[0].provider
+    rule: "Use the provider display name from the selected Shippo rate."
+  service_zone_id:
+    provenance: API-SOURCED
+    source_field: payload.rates[0].zone
+    rule: "Use the selected Shippo rate zone."
+  capacity_z:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from the partner benchmark table; do not represent it as Shippo data."
+  success_rate_z:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from the partner benchmark table; do not represent it as Shippo data."
+
+route:
+  origin_id:
+    provenance: API-SOURCED
+    source_field: payload.address_from.object_id
+    rule: "Use the validated Shippo origin address object identifier."
+  dest_id:
+    provenance: API-SOURCED
+    source_field: payload.address_to.object_id
+    rule: "Use the validated Shippo destination address object identifier."
+  route_name:
+    provenance: DERIVED
+    source_field: payload.address_from.city
+    rule: "Combine origin and destination city and country values."
+  risk_score:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Generate from a documented route-risk benchmark using origin and destination identifiers."
+
+event:
+  event_type:
+    provenance: API-SOURCED
+    source_field: payload.trackingresponse[].trackingevent[].code
+    rule: "Populate from Shippo tracking event code after tracking data is ingested."
+  timestamp_iso:
+    provenance: API-SOURCED
+    source_field: payload.trackingresponse[].trackingevent[].eventdate
+    rule: "Populate from the Shippo tracking event timestamp."
+  audit_hash:
+    provenance: DERIVED
+    source_field: null
+    rule: "Calculate a SHA-256 hash of the canonical event fields."
+  delta_t_hrs:
+    provenance: DERIVED
+    source_field: payload.trackingresponse[].trackingevent[].eventdate
+    rule: "Calculate elapsed hours between consecutive tracking events."
+  location_id:
+    provenance: API-SOURCED
+    source_field: payload.trackingresponse[].trackingevent[].city
+    rule: "Use the tracking event city as the source location identifier."
+  location_kind:
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Classify the event location using the documented location classification rules."
+  exception_reason:
+    provenance: API-SOURCED
+    source_field: payload.messages[].text
+    rule: "Populate only when a Shippo tracking or transaction message represents an exception."
