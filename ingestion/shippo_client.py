@@ -63,7 +63,7 @@ def store_raw_response(
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    batch_id,
+                    str(batch_id),
                     "shippo",
                     source_entity,
                     source_record_id,
