@@ -1,0 +1,29 @@
+{
+  "address_from": {
+    "name": "Test Warehouse",
+    "street1": "215 Clayton St.",
+    "city": "San Francisco",
+    "state": "CA",
+    "zip": "94117",
+    "country": "US"
+  },
+  "address_to": {
+    "name": "Test Customer",
+    "street1": "417 Montgomery St.",
+    "city": "San Francisco",
+    "state": "CA",
+    "zip": "94104",
+    "country": "US"
+  },
+  "parcels": [
+    {
+      "length": "10",
+      "width": "8",
+      "height": "4",
+      "distance_unit": "in",
+      "weight": "2",
+      "mass_unit": "lb"
+    }
+  ],
+  "async": false
+}
