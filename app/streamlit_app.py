@@ -7,16 +7,21 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 import psycopg2
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 
 # Streamlit may execute this file with only the app directory on sys.path.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / "ingestion" / ".env")
 
 from ingestion.shippo_client import ingest_count, reset_pipeline_data
 from transformation.normalize import normalize_staged_records
@@ -24,6 +29,28 @@ from transformation.preprocess import preprocess_records
 
 
 REQUEST_FILE = ROOT / "ingestion" / "shipment_request.example.json"
+
+
+def database_connection_string() -> str | None:
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url and (
+        database_url.startswith(("postgresql://", "postgres://"))
+        or "=" in database_url
+    ):
+        return database_url
+
+    host = os.environ.get("DB_HOST")
+    port = os.environ.get("DB_PORT", "5432")
+    database = os.environ.get("DB_NAME")
+    username = os.environ.get("DB_USER")
+    password = os.environ.get("DB_PASSWORD")
+    if not all((host, database, username, password)):
+        return None
+
+    return (
+        f"postgresql://{quote(username, safe='')}:{quote(password, safe='')}"
+        f"@{host}:{port}/{database}"
+    )
 
 
 def flatten(value: Any, prefix: str = "") -> dict[str, Any]:
@@ -68,18 +95,30 @@ st.set_page_config(page_title="OTC Data Pipeline", layout="wide")
 st.title("OTC Data Preparation Pipeline")
 st.caption("Shippo test API -> raw -> staging -> otc.v1 canonical")
 
-database_url = os.environ.get("DATABASE_URL")
+database_url = database_connection_string()
 if not database_url:
-    st.error("Set DATABASE_URL before starting Streamlit.")
+    st.error(
+        "Configure a valid DATABASE_URL or DB_HOST, DB_PORT, DB_NAME, DB_USER, "
+        "and DB_PASSWORD before starting Streamlit."
+    )
     st.stop()
 
 with st.sidebar:
     st.header("Pipeline controls")
     record_count = st.number_input("Number of test shipments", min_value=1, max_value=100, value=10)
+    configured_token = os.environ.get("SHIPPO_API_TOKEN", "").strip()
+    token_input = st.text_input(
+        "Shippo test API token",
+        type="password",
+        help="Used only for this session when SHIPPO_API_TOKEN is not configured.",
+    )
     if st.button("Ingest from Shippo", type="primary"):
-        token = os.environ.get("SHIPPO_API_TOKEN")
+        token = configured_token or token_input.strip()
         if not token:
-            st.error("Set SHIPPO_API_TOKEN before ingesting.")
+            st.error(
+                "Set SHIPPO_API_TOKEN or enter a Shippo test API token before "
+                "ingesting."
+            )
         else:
             try:
                 with st.spinner("Creating Shippo test shipments..."):

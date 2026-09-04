@@ -92,12 +92,53 @@ Set these environment variables before running the application or CLI:
 | `DATABASE_URL` | Yes | PostgreSQL connection string, for example `postgresql://user:password@localhost:5432/otc` |
 | `SHIPPO_API_TOKEN` | Yes for ingestion | Shippo test-mode token |
 
+Streamlit also supports the existing split PostgreSQL settings used by
+`ingestion\.env`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and
+`DB_PASSWORD`. `DATABASE_URL` takes precedence when both formats are present.
+
+For a persistent local setup, add both the database password and Shippo token
+to the ignored `ingestion\.env` file:
+
+```dotenv
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=otc_platform
+DB_USER=postgres
+DB_PASSWORD=your_local_postgres_password
+SHIPPO_API_TOKEN=shippo_test_your_token
+```
+
+The application loads this file automatically. Keep the real values local;
+`ingestion\.env` is ignored by Git and must never be committed.
+
 PowerShell example:
 
 ```powershell
 $env:DATABASE_URL = "postgresql://postgres:password@localhost:5432/otc"
 $env:SHIPPO_API_TOKEN = "shippo_test_..."
 ```
+
+If `SHIPPO_API_TOKEN` is not configured, the Streamlit sidebar provides a
+password field where you can enter a Shippo test token for the current
+session. The value is not written to the repository or database. A valid
+Shippo test-mode token is still required; the application cannot create one.
+
+Replace `user`, `password`, `otc`, and the host with the credentials and
+database that actually exist on your PostgreSQL server. The values in the
+example are placeholders and will produce a password authentication error if
+used literally.
+
+If you previously exported an invalid `DATABASE_URL`, clear it before using
+the split settings from `ingestion\.env`:
+
+```powershell
+Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+```
+
+When Streamlit starts, it loads `.env` from the repository root and then
+`ingestion\.env` as a compatibility fallback for existing local setups.
+Already-exported environment variables take precedence, so a shell value is
+never replaced by either file.
 
 Do not commit tokens, passwords, or `.env` files. The repository ignores
 `.env` files and Python virtual environments.
