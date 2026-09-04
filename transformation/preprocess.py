@@ -26,7 +26,7 @@ def load_provenance() -> dict[str, Any]:
     return provenance
 
 
-def preprocess_latest(connection_string: str) -> int:
+def preprocess_records(connection_string: str) -> list[int]:
     with psycopg2.connect(connection_string) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -34,43 +34,73 @@ def preprocess_latest(connection_string: str) -> int:
                 SELECT id, batch_id, source_system, source_record_id, payload
                 FROM raw.api_records
                 WHERE ingestion_status = 'SUCCESS'
-                ORDER BY id DESC
-                LIMIT 1
+                  AND source_system = 'shippo'
+                  AND source_entity = 'shipments'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM staging.preprocessed_records AS staged
+                      WHERE staged.raw_record_id = raw.api_records.id
+                  )
+                ORDER BY id
                 """
             )
-            record = cursor.fetchone()
-            if record is None:
-                raise RuntimeError("No successful raw API records are available.")
+            records = cursor.fetchall()
+            if not records:
+                return []
 
-            raw_record_id, batch_id, source_system, source_record_id, payload = record
-            combined_payload: dict[str, Any] = {
-                "source_payload": payload,
-                "enriched_attributes": enrich_shipment(payload),
-                "field_provenance": load_provenance(),
-            }
             cursor.execute(
                 """
-                INSERT INTO staging.preprocessed_records (
-                    raw_record_id,
-                    batch_id,
-                    source_system,
-                    source_record_id,
-                    processed_at,
-                    payload
-                )
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    raw_record_id,
-                    str(batch_id),
-                    source_system,
-                    source_record_id,
-                    datetime.now(timezone.utc),
-                    json.dumps(combined_payload),
-                ),
+                SELECT payload
+                FROM raw.api_records
+                WHERE ingestion_status = 'SUCCESS'
+                  AND source_system = 'shippo'
+                  AND source_entity = 'transactions'
+                """
             )
-            return cursor.fetchone()[0]
+            transactions = {
+                transaction.get("shipment"): transaction
+                for (transaction,) in cursor.fetchall()
+                if transaction.get("shipment")
+            }
+
+            provenance = load_provenance()
+            staged_ids: list[int] = []
+            for raw_record_id, batch_id, source_system, source_record_id, payload in records:
+                payload_for_enrichment = dict(payload)
+                transaction = transactions.get(payload.get("object_id"))
+                if transaction is not None:
+                    payload_for_enrichment["transaction"] = transaction
+                enriched_attributes = enrich_shipment(payload_for_enrichment)
+                enriched_attributes["batch_id"] = str(batch_id)
+                combined_payload: dict[str, Any] = {
+                    "source_payload": payload,
+                    "enriched_attributes": enriched_attributes,
+                    "field_provenance": provenance,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO staging.preprocessed_records (
+                        raw_record_id,
+                        batch_id,
+                        source_system,
+                        source_record_id,
+                        processed_at,
+                        payload
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        raw_record_id,
+                        str(batch_id),
+                        source_system,
+                        source_record_id,
+                        datetime.now(timezone.utc),
+                        json.dumps(combined_payload),
+                    ),
+                )
+                staged_ids.append(cursor.fetchone()[0])
+            return staged_ids
 
 
 def main() -> int:
@@ -79,8 +109,8 @@ def main() -> int:
         print("Set DATABASE_URL before running preprocessing.", file=sys.stderr)
         return 2
 
-    record_id = preprocess_latest(connection_string)
-    print(f"Stored combined preprocessed record {record_id}")
+    record_ids = preprocess_records(connection_string)
+    print(f"Stored {len(record_ids)} combined preprocessed records")
     return 0
 
 

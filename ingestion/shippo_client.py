@@ -18,6 +18,15 @@ import requests
 SHIPPO_API_URL = "https://api.goshippo.com"
 
 
+def reset_pipeline_data(connection_string: str) -> None:
+    """Remove prior pipeline output so the next ingest is a fresh batch."""
+    with psycopg2.connect(connection_string) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM canonical.otc_records")
+            cursor.execute("DELETE FROM staging.preprocessed_records")
+            cursor.execute("DELETE FROM raw.api_records")
+
+
 def load_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as request_file:
         payload = json.load(request_file)
@@ -102,6 +111,77 @@ def ingest(request_path: Path, endpoint: str, token: str, connection_string: str
     )
     response.raise_for_status()
     return batch_id
+
+
+def ingest_count(
+    request_path: Path,
+    count: int,
+    token: str,
+    connection_string: str,
+) -> int:
+    """Create and store a requested number of Shippo test shipment responses."""
+    if count < 1:
+        raise ValueError("count must be at least 1")
+
+    template = load_json(request_path)
+    stored = 0
+    for sequence in range(1, count + 1):
+        request_payload = json.loads(json.dumps(template))
+        request_payload["reference"] = f"OTC-TEST-{uuid.uuid4().hex[:12].upper()}"
+        response = requests.post(
+            f"{SHIPPO_API_URL}/shipments/",
+            headers={
+                "Authorization": f"ShippoToken {token}",
+                "Content-Type": "application/json",
+            },
+            json=request_payload,
+            timeout=30,
+        )
+        payload = response_payload(response)
+        batch_id = uuid.uuid4()
+        store_raw_response(
+            connection_string,
+            batch_id,
+            "shipments",
+            datetime.now(timezone.utc),
+            payload,
+            "SUCCESS" if response.ok else "FAILED",
+            None if response.ok else f"HTTP {response.status_code}",
+        )
+        response.raise_for_status()
+        shipment_id = payload.get("object_id")
+        rates = payload.get("rates", [])
+        if not shipment_id or not rates:
+            raise ValueError("Shippo shipment response has no object_id or rates.")
+
+        transaction_response = requests.post(
+            f"{SHIPPO_API_URL}/transactions/",
+            headers={
+                "Authorization": f"ShippoToken {token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "rate": rates[0]["object_id"],
+                "label_file_type": "PDF",
+                "async": False,
+            },
+            timeout=30,
+        )
+        transaction_payload = response_payload(transaction_response)
+        store_raw_response(
+            connection_string,
+            batch_id,
+            "transactions",
+            datetime.now(timezone.utc),
+            transaction_payload,
+            "SUCCESS" if transaction_response.ok else "FAILED",
+            None
+            if transaction_response.ok
+            else f"HTTP {transaction_response.status_code}",
+        )
+        transaction_response.raise_for_status()
+        stored += 1
+    return stored
 
 
 def main() -> int:

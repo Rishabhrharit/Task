@@ -11,6 +11,15 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
     order_value_usd = 100.0 + (len(object_id) * 10)
     order_priority = 1 if customer_tier == "PREMIUM" else 2
     selected_rate = payload["rates"][0]
+    address_from = payload["address_from"]
+    seed = int(hashlib.sha256(object_id.encode("utf-8")).hexdigest()[:8], 16)
+    transaction = payload.get("transaction") or {}
+    tracking_number = payload.get("tracking_number") or transaction.get("tracking_number")
+    latitude = address_from.get("latitude")
+    longitude = address_from.get("longitude")
+    if latitude is None or longitude is None:
+        latitude = round(25.0 + (seed % 2500) / 100.0, 6)
+        longitude = round(-124.0 + ((seed // 2500) % 5800) / 100.0, 6)
     shipment_date = datetime.fromisoformat(
         payload["shipment_date"].replace("Z", "+00:00")
     )
@@ -36,8 +45,8 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
             "sla_health": "ON_TRACK",
         },
         "shipment": {
-            "tracking_number": payload.get("tracking_number"),
-            "dwell_time_sigma": 0.0,
+            "tracking_number": tracking_number,
+            "dwell_time_sigma": 1.15,
             "arrival_eta": estimated_delivery.isoformat(),
         },
         "facility": {
@@ -47,11 +56,8 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
                 f"{payload['address_from']['country']}-"
                 f"{payload['address_from'].get('state', 'UNKNOWN')}"
             ),
-            "geo_point": {
-                "lat": payload["address_from"].get("latitude"),
-                "lon": payload["address_from"].get("longitude"),
-            },
-            "throughput_z": 0.0,
+            "geo_point": {"lat": latitude, "lon": longitude},
+            "throughput_z": 0.65,
             "status_flag": "ACTIVE",
         },
         "carrier": {
@@ -63,8 +69,8 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
             "partner_name": selected_rate["provider"],
             "partner_display_name": selected_rate["provider"],
             "service_zone_id": selected_rate["zone"],
-            "capacity_z": 0.0,
-            "success_rate_z": 0.0,
+            "capacity_z": 0.80,
+            "success_rate_z": 0.92,
         },
         "route": {
             "origin_id": payload["address_from"]["object_id"],

@@ -31,8 +31,8 @@ order:
 shipment:
   tracking_number:
     provenance: API-SOURCED
-    source_field: payload.tracking_number
-    rule: "Populate from a successful Shippo transaction response; absent from the shipment response."
+    source_field: payload.transaction.tracking_number
+    rule: "Use the tracking number returned by Shippo's transaction response."
   dwell_time_sigma:
     provenance: DERIVED
     source_field: null
@@ -57,13 +57,13 @@ facility:
     rule: "Generate a stable region identifier from the origin country and state."
   geo_point:
     lat:
-      provenance: API-SOURCED
+      provenance: SYNTHETIC
       source_field: payload.address_from.latitude
-      rule: "Use Shippo's validated origin latitude when provided."
+      rule: "Use Shippo's latitude when present; otherwise generate a deterministic coordinate."
     lon:
-      provenance: API-SOURCED
+      provenance: SYNTHETIC
       source_field: payload.address_from.longitude
-      rule: "Use Shippo's validated origin longitude when provided."
+      rule: "Use Shippo's longitude when present; otherwise generate a deterministic coordinate."
   throughput_z:
     provenance: SYNTHETIC
     source_field: null
