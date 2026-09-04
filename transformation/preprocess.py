@@ -65,11 +65,20 @@ def preprocess_records(connection_string: str) -> list[int]:
 
             provenance = load_provenance()
             staged_ids: list[int] = []
-            for raw_record_id, batch_id, source_system, source_record_id, payload in records:
+            for sequence, (
+                raw_record_id,
+                batch_id,
+                source_system,
+                source_record_id,
+                payload,
+            ) in enumerate(records, start=1):
                 payload_for_enrichment = dict(payload)
                 transaction = transactions.get(payload.get("object_id"))
                 if transaction is not None:
                     payload_for_enrichment["transaction"] = transaction
+                payload_for_enrichment["synthetic_tracking_number"] = (
+                    f"shp_{sequence:06d}"
+                )
                 enriched_attributes = enrich_shipment(payload_for_enrichment)
                 enriched_attributes["batch_id"] = str(batch_id)
                 combined_payload: dict[str, Any] = {

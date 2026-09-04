@@ -14,7 +14,11 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
     address_from = payload["address_from"]
     seed = int(hashlib.sha256(object_id.encode("utf-8")).hexdigest()[:8], 16)
     transaction = payload.get("transaction") or {}
-    tracking_number = payload.get("tracking_number") or transaction.get("tracking_number")
+    tracking_number = (
+        payload.get("tracking_number")
+        or transaction.get("tracking_number")
+        or payload["synthetic_tracking_number"]
+    )
     latitude = address_from.get("latitude")
     longitude = address_from.get("longitude")
     if latitude is None or longitude is None:

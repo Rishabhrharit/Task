@@ -30,9 +30,9 @@ order:
 
 shipment:
   tracking_number:
-    provenance: API-SOURCED
-    source_field: payload.transaction.tracking_number
-    rule: "Use the tracking number returned by Shippo's transaction response."
+    provenance: SYNTHETIC
+    source_field: null
+    rule: "Use Shippo's tracking number when present; otherwise generate shp_000001-style identifiers per fresh batch."
   dwell_time_sigma:
     provenance: DERIVED
     source_field: null
