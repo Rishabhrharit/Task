@@ -102,6 +102,7 @@ Set these environment variables before running the application or CLI:
 | `ODOO_USERNAME` | Yes for Odoo ingestion | Odoo user login |
 | `ODOO_PASSWORD` | Yes for Odoo ingestion | Odoo password or API key |
 | `ODOO_LIMIT` | No | Maximum pickings and orders per run; default `100` |
+| `CANONICAL_SCHEMA_PATH` | No | JSON Schema used to project and validate canonical output |
 
 Streamlit also supports the existing split PostgreSQL settings used by
 `ingestion\.env`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and
@@ -268,6 +269,16 @@ mapping artifact at the staging-to-canonical boundary. This repository does
 not infer business semantics or invent mappings; it guarantees that the
 source payload, identifiers, batch metadata, and extraction metadata are
 available for the supplied canonical map.
+
+### Runtime canonical schema
+
+Set `CANONICAL_SCHEMA_PATH` to the supplied JSON Schema. During normalization,
+the pipeline projects each normalized record to the schema's declared
+properties and validates the result. Adding or removing canonical properties
+therefore changes the published shape through the schema, without changing
+`normalize.py`. Required fields and types are enforced; invalid records fail
+normalization instead of being published as valid canonical data. See
+`canonical.schema.example.json` for the expected format.
 
 ### Ingest Odoo Community
 

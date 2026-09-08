@@ -73,6 +73,7 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "batch_id": None,
         "erp_source": "SYNTHETIC_ERP",
+        "entity_id": object_id,
         "order": {
             "customer_tier": customer_tier,
             "order_value_usd": order_value_usd,

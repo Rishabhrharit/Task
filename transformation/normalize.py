@@ -10,6 +10,7 @@ from typing import Any
 
 import psycopg2
 
+from transformation.canonical_schema import apply_canonical_schema
 
 def clean_values(value: Any) -> Any:
     if isinstance(value, dict):
@@ -75,7 +76,7 @@ def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
         "extracted_at": source.get("object_created", ""),
         "updated_at": source.get("object_updated", ""),
     }
-    return {
+    record = {
         "schema_version": "otc.v1",
         "metadata": metadata,
         "entity": {
@@ -103,6 +104,7 @@ def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
         ],
         "derived": enriched["derived"],
     }
+    return apply_canonical_schema(record)
 
 
 def normalize_staged_records(connection_string: str) -> int:
