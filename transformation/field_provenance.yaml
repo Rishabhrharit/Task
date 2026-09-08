@@ -29,6 +29,10 @@ order:
     rule: "Compare estimated_delivery_dt with target_delivery_dt."
 
 shipment:
+  shipment_id:
+    provenance: API-SOURCED
+    source_field: payload.object_id
+    rule: "Use Shippo's object_id as the canonical source shipment identifier."
   tracking_number:
     provenance: SYNTHETIC
     source_field: null

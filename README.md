@@ -44,7 +44,10 @@ again.
 | `app/streamlit_app.py` | Streamlit control panel and pipeline controls |
 | `ingestion/shippo_client.py` | Shippo test shipment/transaction ingestion and raw persistence |
 | `ingestion/shipment_request.example.json` | Safe example request body sent to Shippo |
-| `ingestion/runner.py` | Separate synthetic OTC API ingestion prototype |
+| `ingestion/odoo_client.py` | Odoo Community stock-picking ingestion |
+| `ingestion/generic_rest.py` | Configurable REST API ingestion template |
+| `ingestion/.env.example` | Template configuration for a new API source |
+| `ingestion/runner.py` | Legacy local ERP-shaped API ingestion prototype |
 | `source_api/app/main.py` | FastAPI synthetic `/orders` source |
 | `transformation/preprocess.py` | Builds staging records from raw Shippo shipments |
 | `transformation/enrichment.py` | Adds deterministic canonical attributes |
@@ -55,15 +58,18 @@ again.
 | `database/canonical.sql` | PostgreSQL canonical schema |
 | `preprocessed_records.json` | Example/generated preprocessed output |
 
-The `source_api` and `ingestion/runner.py` files represent an alternate
-synthetic orders path. The supported end-to-end UI workflow uses Shippo and
-`ingestion/shippo_client.py`.
+The `source_api` and `ingestion/runner.py` files represent an ERP-shaped
+orders path. It is intentionally local and deterministic so the pipeline can
+be tested against a second, non-Shippo schema. A live SAP or Oracle connector
+can replace its HTTP URL without changing the raw, staging, or canonical
+interfaces.
 
 ## Prerequisites
 
 - Python 3.11 or a compatible recent Python version
 - PostgreSQL with permission to create schemas and tables
 - A Shippo test-mode API token
+- An Odoo Community instance with XML-RPC access (for the Odoo path)
 - Windows PowerShell, macOS/Linux shell, or an equivalent terminal
 
 The Python dependencies are pinned in
@@ -91,6 +97,11 @@ Set these environment variables before running the application or CLI:
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL connection string, for example `postgresql://user:password@localhost:5432/otc` |
 | `SHIPPO_API_TOKEN` | Yes for ingestion | Shippo test-mode token |
+| `ODOO_URL` | Yes for Odoo ingestion | Odoo base URL, for example `http://localhost:8069` |
+| `ODOO_DB` | Yes for Odoo ingestion | Odoo database name |
+| `ODOO_USERNAME` | Yes for Odoo ingestion | Odoo user login |
+| `ODOO_PASSWORD` | Yes for Odoo ingestion | Odoo password or API key |
+| `ODOO_LIMIT` | No | Maximum pickings and orders per run; default `100` |
 
 Streamlit also supports the existing split PostgreSQL settings used by
 `ingestion\.env`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and
@@ -208,6 +219,80 @@ Each transformation command reads `DATABASE_URL`, writes to PostgreSQL, and
 prints the number of records written. The preprocessing stage reads
 `transformation/field_provenance.yaml` on every run, so provenance changes are
 captured in the staging payload.
+
+### Ingest the ERP-shaped API
+
+Start the local source API:
+
+```powershell
+uvicorn source_api.app.main:app --port 8000
+```
+
+Then, from another terminal with `DATABASE_URL` configured:
+
+```powershell
+python -m ingestion.runner
+python -m transformation.preprocess
+python -m transformation.normalize
+```
+
+The ERP path maps `shipment_id`, `order_id`, `tracking_number`, `carrier`,
+`warehouse_id`, dates, priority, status, currency, and `updated_at` into the
+same canonical contract while retaining the source system in metadata.
+
+### Add a new REST API source
+
+Clone this repository, copy `ingestion\.env.example` to `ingestion\.env`, and
+replace the API settings:
+
+```powershell
+Copy-Item ingestion\.env.example ingestion\.env
+```
+
+Configure `API_URL`, `API_TOKEN`, `SOURCE_SYSTEM`, `SOURCE_ENTITY`, and
+`API_ID_FIELD`. If the response is wrapped, set `API_RECORDS_PATH`, such as
+`data.items`. The connector supports bearer tokens and custom token headers.
+
+Run:
+
+```powershell
+python -m ingestion.generic_rest
+python -m transformation.preprocess
+python -m transformation.normalize
+```
+
+The generic connector writes every API object unchanged to `raw.api_records`
+with a batch ID and source record ID. The canonical mapping is an external
+input to this repository: provide the mapping implementation or generated
+mapping artifact at the staging-to-canonical boundary. This repository does
+not infer business semantics or invent mappings; it guarantees that the
+source payload, identifiers, batch metadata, and extraction metadata are
+available for the supplied canonical map.
+
+### Ingest Odoo Community
+
+Configure the Odoo instance in the ignored environment file:
+
+```dotenv
+ODOO_URL=http://localhost:8069
+ODOO_DB=odoo
+ODOO_USERNAME=admin@example.com
+ODOO_PASSWORD=your_odoo_password_or_api_key
+ODOO_LIMIT=100
+```
+
+Then run:
+
+```powershell
+python -m ingestion.odoo_client
+python -m transformation.preprocess
+python -m transformation.normalize
+```
+
+The connector reads Odoo `stock.picking` records and joins matching
+`sale.order` records. It maps the Odoo picking name to `shipment_id`, the
+origin to `order_id`, carrier tracking reference, carrier, customer, warehouse,
+status, scheduled dates, order value, currency, and source update timestamp.
 
 ## Transformation and data lineage
 

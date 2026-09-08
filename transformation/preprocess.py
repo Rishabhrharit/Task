@@ -12,7 +12,7 @@ from typing import Any
 import psycopg2
 import yaml
 
-from transformation.enrichment import enrich_shipment
+from transformation.enrichment import enrich_order, enrich_shipment
 
 
 PROVENANCE_PATH = Path(__file__).with_name("field_provenance.yaml")
@@ -31,11 +31,14 @@ def preprocess_records(connection_string: str) -> list[int]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, batch_id, source_system, source_record_id, payload
+                SELECT id, batch_id, source_system, source_entity,
+                       source_record_id, payload
                 FROM raw.api_records
                 WHERE ingestion_status = 'SUCCESS'
-                  AND source_system = 'shippo'
-                  AND source_entity = 'shipments'
+                  AND (
+                      (source_system = 'shippo' AND source_entity = 'shipments')
+                      OR source_entity = 'orders'
+                  )
                   AND NOT EXISTS (
                       SELECT 1
                       FROM staging.preprocessed_records AS staged
@@ -69,22 +72,28 @@ def preprocess_records(connection_string: str) -> list[int]:
                 raw_record_id,
                 batch_id,
                 source_system,
+                source_entity,
                 source_record_id,
                 payload,
             ) in enumerate(records, start=1):
-                payload_for_enrichment = dict(payload)
-                transaction = transactions.get(payload.get("object_id"))
-                if transaction is not None:
-                    payload_for_enrichment["transaction"] = transaction
-                payload_for_enrichment["synthetic_tracking_number"] = (
-                    f"shp_{sequence:06d}"
-                )
-                enriched_attributes = enrich_shipment(payload_for_enrichment)
+                if source_entity == "orders":
+                    enriched_attributes = enrich_order(payload)
+                else:
+                    payload_for_enrichment = dict(payload)
+                    transaction = transactions.get(payload.get("object_id"))
+                    if transaction is not None:
+                        payload_for_enrichment["transaction"] = transaction
+                    payload_for_enrichment["synthetic_tracking_number"] = (
+                        f"shp_{sequence:06d}"
+                    )
+                    enriched_attributes = enrich_shipment(payload_for_enrichment)
                 enriched_attributes["batch_id"] = str(batch_id)
                 combined_payload: dict[str, Any] = {
                     "source_payload": payload,
                     "enriched_attributes": enriched_attributes,
                     "field_provenance": provenance,
+                    "source_system": source_system,
+                    "source_entity": source_entity,
                 }
                 cursor.execute(
                     """

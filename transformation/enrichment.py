@@ -2,6 +2,40 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+def enrich_order(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map ERP order fields into the canonical contract without Shippo assumptions."""
+    order_value = float(payload["order_value"].replace("$", "").replace(",", ""))
+    return {
+        "batch_id": None,
+        "erp_source": payload.get("erp_system", "ERP"),
+        "entity_id": payload["shipment_id"],
+        "order": {
+            "order_id": payload["order_id"],
+            "customer_id": payload["customer_id"],
+            "order_value_usd": order_value,
+            "currency": payload.get("currency", "USD"),
+            "original_promise_dt": payload.get("promise_date"),
+            "target_delivery_dt": payload.get("target_date"),
+            "order_priority": payload.get("priority", "NORMAL"),
+            "status": payload.get("order_status"),
+        },
+        "shipment": {
+            "shipment_id": payload["shipment_id"],
+            "tracking_number": payload.get("tracking_number"),
+        },
+        "facility": {"facility_id": payload.get("warehouse_id")},
+        "carrier": {"carrier_name": payload.get("carrier")},
+        "delivery_partner": {"partner_name": payload.get("carrier")},
+        "route": {"origin_id": payload.get("warehouse_id"), "dest_id": payload["customer_id"]},
+        "event": {
+            "event_type": "ORDER_UPDATED",
+            "timestamp_iso": payload.get("updated_at") or payload.get("promise_date"),
+            "exception_reason": None,
+        },
+        "derived": {"fields": {}, "calculation": "ERP source values mapped directly"},
+    }
+
+
 def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
     """Return canonical attributes enriched from one Shippo shipment."""
     object_id = payload["object_id"]
@@ -49,6 +83,7 @@ def enrich_shipment(payload: dict[str, Any]) -> dict[str, Any]:
             "sla_health": "ON_TRACK",
         },
         "shipment": {
+            "shipment_id": object_id,
             "tracking_number": tracking_number,
             "dwell_time_sigma": 1.15,
             "arrival_eta": estimated_delivery.isoformat(),

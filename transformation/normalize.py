@@ -64,11 +64,13 @@ def remove_numeric_outliers(
 def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
     source = clean_values(staged["source_payload"])
     enriched = clean_values(staged["enriched_attributes"])
-    shipment_id = source["object_id"]
+    shipment_id = enriched["entity_id"]
+    source_system = staged.get("source_system", "shippo")
+    source_entity = staged.get("source_entity", "shipments")
     metadata = {
         "batch_id": staged["source_payload"].get("batch_id", ""),
-        "source_system": "shippo",
-        "source_entity": "shipments",
+        "source_system": source_system,
+        "source_entity": source_entity,
         "source_record_id": shipment_id,
         "extracted_at": source.get("object_created", ""),
         "updated_at": source.get("object_updated", ""),
