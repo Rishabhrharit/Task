@@ -140,10 +140,21 @@ with st.sidebar:
                 st.rerun()
 
     if st.button("Normalize to otc.v1"):
-        with st.spinner("Normalizing staged records..."):
-            normalized = normalize_staged_records(database_url)
-        st.success(f"Normalized {normalized} new records.")
-        st.rerun()
+        with st.status("Normalizing staged records...", expanded=True) as status:
+            try:
+                normalized = normalize_staged_records(database_url)
+            except psycopg2.Error as error:
+                status.update(
+                    label="Normalization failed",
+                    state="error",
+                )
+                st.error(f"Unable to normalize staged records: {error}")
+            else:
+                status.update(
+                    label=f"Normalization complete: {normalized} records",
+                    state="complete",
+                )
+                st.success(f"Normalized {normalized} new records.")
 
 try:
     staged_records = load_table(database_url, "staging.preprocessed_records")

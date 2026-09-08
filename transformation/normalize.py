@@ -73,8 +73,8 @@ def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
         "source_system": source_system,
         "source_entity": source_entity,
         "source_record_id": shipment_id,
-        "extracted_at": source.get("object_created", ""),
-        "updated_at": source.get("object_updated", ""),
+        "extracted_at": source.get("object_created") or source.get("updated_at", ""),
+        "updated_at": source.get("object_updated") or source.get("updated_at", ""),
     }
     record = {
         "schema_version": "otc.v1",

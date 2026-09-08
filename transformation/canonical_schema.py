@@ -29,11 +29,20 @@ def _project(value: Any, schema: dict[str, Any], path: str) -> Any:
         properties = schema.get("properties", {})
         if not isinstance(properties, dict):
             raise ValueError(f"Invalid properties definition at {path or '$'}.")
-        return {
+        projected = {
             key: _project(value[key], child_schema, f"{path}.{key}".strip("."))
             for key, child_schema in properties.items()
             if key in value
         }
+        if schema.get("additionalProperties", True) is not False:
+            projected.update(
+                {
+                    key: nested
+                    for key, nested in value.items()
+                    if key not in properties
+                }
+            )
+        return projected
     if schema_type == "array" and isinstance(value, list):
         item_schema = schema.get("items", {})
         return [_project(item, item_schema, f"{path}[]") for item in value]
