@@ -56,7 +56,6 @@ again.
 | `database/raw.sql` | PostgreSQL raw schema |
 | `database/staging.sql` | PostgreSQL staging schema |
 | `database/canonical.sql` | PostgreSQL canonical schema |
-| `preprocessed_records.json` | Example/generated preprocessed output |
 
 The `source_api` and `ingestion/runner.py` files represent an ERP-shaped
 orders path. It is intentionally local and deterministic so the pipeline can
