@@ -20,8 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-load_dotenv(ROOT / ".env")
-load_dotenv(ROOT / "ingestion" / ".env")
+from config import load_project_env
+
+load_project_env()
 
 from ingestion.shippo_client import ingest_count, reset_pipeline_data
 from transformation.normalize import normalize_staged_records

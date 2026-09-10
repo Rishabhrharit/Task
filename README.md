@@ -46,7 +46,6 @@ again.
 | `ingestion/shipment_request.example.json` | Safe example request body sent to Shippo |
 | `ingestion/odoo_client.py` | Odoo Community stock-picking ingestion |
 | `ingestion/generic_rest.py` | Configurable REST API ingestion template |
-| `ingestion/.env.example` | Template configuration for a new API source |
 | `ingestion/runner.py` | Legacy local ERP-shaped API ingestion prototype |
 | `source_api/app/main.py` | FastAPI synthetic `/orders` source |
 | `transformation/preprocess.py` | Builds staging records from raw Shippo shipments |
@@ -103,12 +102,18 @@ Set these environment variables before running the application or CLI:
 | `ODOO_LIMIT` | No | Maximum pickings and orders per run; default `100` |
 | `CANONICAL_SCHEMA_PATH` | No | JSON Schema used to project and validate canonical output |
 
-Streamlit also supports the existing split PostgreSQL settings used by
-`ingestion\.env`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and
-`DB_PASSWORD`. `DATABASE_URL` takes precedence when both formats are present.
+All components load configuration from the repository-root `.env` file.
+Streamlit and command-line scripts also support the split PostgreSQL settings
+`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
+`DATABASE_URL` takes precedence when both formats are present.
 
-For a persistent local setup, add both the database password and Shippo token
-to the ignored `ingestion\.env` file:
+For a persistent local setup, copy the root template and add local credentials:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then edit the root `.env`:
 
 ```dotenv
 DB_HOST=localhost
@@ -119,8 +124,8 @@ DB_PASSWORD=your_local_postgres_password
 SHIPPO_API_TOKEN=shippo_test_your_token
 ```
 
-The application loads this file automatically. Keep the real values local;
-`ingestion\.env` is ignored by Git and must never be committed.
+Keep the real values local; `.env` is ignored by Git and must never be
+committed.
 
 PowerShell example:
 
@@ -140,16 +145,14 @@ example are placeholders and will produce a password authentication error if
 used literally.
 
 If you previously exported an invalid `DATABASE_URL`, clear it before using
-the split settings from `ingestion\.env`:
+the split settings from `.env`:
 
 ```powershell
 Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
 ```
 
-When Streamlit starts, it loads `.env` from the repository root and then
-`ingestion\.env` as a compatibility fallback for existing local setups.
-Already-exported environment variables take precedence, so a shell value is
-never replaced by either file.
+Shell environment variables take precedence, so a shell value is never
+replaced by the root `.env`.
 
 Do not commit tokens, passwords, or `.env` files. The repository ignores
 `.env` files and Python virtual environments.
@@ -242,11 +245,11 @@ same canonical contract while retaining the source system in metadata.
 
 ### Add a new REST API source
 
-Clone this repository, copy `ingestion\.env.example` to `ingestion\.env`, and
+Clone this repository, copy `.env.example` to `.env`, and
 replace the API settings:
 
 ```powershell
-Copy-Item ingestion\.env.example ingestion\.env
+Copy-Item .env.example .env
 ```
 
 Configure `API_URL`, `API_TOKEN`, `SOURCE_SYSTEM`, `SOURCE_ENTITY`, and

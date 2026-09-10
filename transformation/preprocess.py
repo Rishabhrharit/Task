@@ -12,10 +12,13 @@ from typing import Any
 import psycopg2
 import yaml
 
+from config import load_project_env
+
 from transformation.enrichment import enrich_order, enrich_shipment
 
 
 PROVENANCE_PATH = Path(__file__).with_name("field_provenance.yaml")
+load_project_env()
 
 
 def load_provenance() -> dict[str, Any]:

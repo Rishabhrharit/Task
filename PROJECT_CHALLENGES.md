@@ -80,7 +80,7 @@ installing Odoo.
 Files added:
 
 - `ingestion/generic_rest.py`
-- `ingestion/.env.example`
+- `.env.example`
 
 Supported configuration includes:
 
@@ -119,7 +119,7 @@ The generic REST connector now:
 The documented execution flow is:
 
 ```powershell
-Copy-Item ingestion\.env.example ingestion\.env
+Copy-Item .env.example .env
 python -m ingestion.generic_rest
 python -m transformation.preprocess
 python -m transformation.normalize

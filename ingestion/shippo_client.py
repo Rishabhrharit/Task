@@ -14,6 +14,10 @@ from typing import Any
 import psycopg2
 import requests
 
+from config import load_project_env
+
+load_project_env()
+
 
 SHIPPO_API_URL = "https://api.goshippo.com"
 

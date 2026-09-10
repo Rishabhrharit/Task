@@ -10,9 +10,9 @@ from typing import Any
 import psycopg2
 import psycopg2.extras
 import requests
-from dotenv import load_dotenv
+from config import load_project_env
 
-load_dotenv()
+load_project_env()
 
 API_URL = os.getenv("ERP_API_URL", "http://localhost:8000/orders")
 

@@ -5,15 +5,14 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 import requests
-from dotenv import load_dotenv
+from config import load_project_env
 
-load_dotenv(Path(__file__).with_name(".env"))
+load_project_env()
 
 
 def required(name: str) -> str:

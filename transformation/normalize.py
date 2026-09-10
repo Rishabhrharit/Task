@@ -10,7 +10,10 @@ from typing import Any
 
 import psycopg2
 
+from config import load_project_env
 from transformation.canonical_schema import apply_canonical_schema
+
+load_project_env()
 
 def clean_values(value: Any) -> Any:
     if isinstance(value, dict):

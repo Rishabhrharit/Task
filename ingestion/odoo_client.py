@@ -10,9 +10,9 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
-from dotenv import load_dotenv
+from config import load_project_env
 
-load_dotenv()
+load_project_env()
 
 
 def _required(name: str) -> str:
