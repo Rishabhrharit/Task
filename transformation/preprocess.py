@@ -1,4 +1,4 @@
-"""Combine a raw Shippo payload with generated attributes in staging."""
+"""Combine a raw API payload with a source mapping into canonical staging data."""
 
 from __future__ import annotations
 
@@ -13,9 +13,8 @@ import psycopg2
 import yaml
 
 from config import load_project_env
-
 from transformation.enrichment import enrich_order, enrich_shipment
-
+from transformation.generic_mapper import map_payload_to_canonical, load_mapping_config
 
 PROVENANCE_PATH = Path(__file__).with_name("field_provenance.yaml")
 load_project_env()
@@ -29,19 +28,54 @@ def load_provenance() -> dict[str, Any]:
     return provenance
 
 
-def preprocess_records(connection_string: str) -> list[int]:
+def build_enriched_attributes(
+    payload: dict[str, Any],
+    *,
+    source_system: str,
+    source_entity: str,
+    batch_id: str,
+    mapping_path: str | None = None,
+) -> dict[str, Any]:
+    mapping = load_mapping_config(mapping_path)
+    if mapping is not None:
+        mapped = map_payload_to_canonical(
+            payload,
+            mapping=mapping,
+            source_system=source_system,
+            source_entity=source_entity,
+            batch_id=batch_id,
+        )
+        mapped["batch_id"] = str(batch_id)
+        return mapped
+
+    if source_entity in {"orders", "order"}:
+        enriched_attributes = enrich_order(payload)
+    else:
+        payload_for_enrichment = dict(payload)
+        payload_for_enrichment["synthetic_tracking_number"] = (
+            payload_for_enrichment.get("synthetic_tracking_number")
+            or f"src_{source_entity}_{batch_id[:8]}"
+        )
+        enriched_attributes = enrich_shipment(payload_for_enrichment)
+    enriched_attributes["batch_id"] = str(batch_id)
+    return enriched_attributes
+
+
+def preprocess_records(connection_string: str, batch_id: str | None = None) -> list[int]:
+    mapping_path = os.getenv("SOURCE_MAPPING_PATH") or os.getenv("MAPPING_CONFIG_PATH")
     with psycopg2.connect(connection_string) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
+            query = """
                 SELECT id, batch_id, source_system, source_entity,
                        source_record_id, payload
                 FROM raw.api_records
                 WHERE ingestion_status = 'SUCCESS'
-                  AND (
-                      (source_system = 'shippo' AND source_entity = 'shipments')
-                      OR source_entity = 'orders'
-                  )
+            """
+            params: list[Any] = []
+            if batch_id:
+                query += " AND batch_id = %s"
+                params.append(batch_id)
+            query += """
                   AND NOT EXISTS (
                       SELECT 1
                       FROM staging.preprocessed_records AS staged
@@ -49,50 +83,30 @@ def preprocess_records(connection_string: str) -> list[int]:
                   )
                 ORDER BY id
                 """
-            )
+            cursor.execute(query, params)
             records = cursor.fetchall()
             if not records:
                 return []
 
-            cursor.execute(
-                """
-                SELECT payload
-                FROM raw.api_records
-                WHERE ingestion_status = 'SUCCESS'
-                  AND source_system = 'shippo'
-                  AND source_entity = 'transactions'
-                """
-            )
-            transactions = {
-                transaction.get("shipment"): transaction
-                for (transaction,) in cursor.fetchall()
-                if transaction.get("shipment")
-            }
-
             provenance = load_provenance()
             staged_ids: list[int] = []
-            for sequence, (
-                raw_record_id,
-                batch_id,
-                source_system,
-                source_entity,
-                source_record_id,
-                payload,
-            ) in enumerate(records, start=1):
-                if source_entity == "orders":
-                    enriched_attributes = enrich_order(payload)
-                else:
-                    payload_for_enrichment = dict(payload)
-                    transaction = transactions.get(payload.get("object_id"))
-                    if transaction is not None:
-                        payload_for_enrichment["transaction"] = transaction
-                    payload_for_enrichment["synthetic_tracking_number"] = (
-                        f"shp_{sequence:06d}"
+            for raw_record_id, batch_id, source_system, source_entity, source_record_id, payload in records:
+                payload_dict = payload if isinstance(payload, dict) else {}
+                payload_for_mapping = dict(payload_dict)
+                if not payload_for_mapping.get("synthetic_tracking_number"):
+                    payload_for_mapping["synthetic_tracking_number"] = (
+                        f"{source_system}_{source_entity}_{raw_record_id:06d}"
                     )
-                    enriched_attributes = enrich_shipment(payload_for_enrichment)
-                enriched_attributes["batch_id"] = str(batch_id)
+
+                enriched_attributes = build_enriched_attributes(
+                    payload_for_mapping,
+                    source_system=source_system,
+                    source_entity=source_entity,
+                    batch_id=str(batch_id),
+                    mapping_path=mapping_path,
+                )
                 combined_payload: dict[str, Any] = {
-                    "source_payload": payload,
+                    "source_payload": payload_dict,
                     "enriched_attributes": enriched_attributes,
                     "field_provenance": provenance,
                     "source_system": source_system,

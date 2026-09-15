@@ -110,20 +110,23 @@ def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
     return apply_canonical_schema(record)
 
 
-def normalize_staged_records(connection_string: str) -> int:
+def normalize_staged_records(connection_string: str, batch_id: str | None = None) -> int:
     with psycopg2.connect(connection_string) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
+            query = """
                 SELECT id, batch_id, source_record_id, payload
                 FROM staging.preprocessed_records
                 WHERE NOT EXISTS (
                     SELECT 1 FROM canonical.otc_records AS canonical
                     WHERE canonical.staging_record_id = staging.preprocessed_records.id
                 )
-                ORDER BY id
                 """
-            )
+            params: list[Any] = []
+            if batch_id:
+                query += " AND batch_id = %s"
+                params.append(batch_id)
+            query += " ORDER BY id"
+            cursor.execute(query, params)
             records = cursor.fetchall()
             normalized_records = [
                 (staging_id, batch_id, source_record_id, normalize_record(payload))

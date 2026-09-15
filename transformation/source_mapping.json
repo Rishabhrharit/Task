@@ -1,0 +1,41 @@
+{
+  "source": {
+    "entity_id": "object_id",
+    "order_id": "order_id",
+    "shipment_id": "object_id",
+    "carrier_name": "rates.0.provider",
+    "partner_name": "rates.0.provider",
+    "facility_id": "address_from.object_id",
+    "route_origin": "address_from.object_id",
+    "route_dest": "address_to.object_id"
+  },
+  "canonical": {
+    "order.order_id": "order_id",
+    "order.customer_id": "reference",
+    "order.order_value_usd": "amount",
+    "order.original_promise_dt": "shipment_date",
+    "order.target_delivery_dt": "shipment_date",
+    "order.estimated_delivery_dt": "shipment_date",
+    "order.order_priority": "priority",
+    "order.sla_health": "status",
+    "shipment.shipment_id": "object_id",
+    "shipment.tracking_number": "tracking_number",
+    "shipment.arrival_eta": "shipment_date",
+    "facility.facility_id": "address_from.object_id",
+    "facility.facility_type": "facility_type",
+    "facility.region_id": "address_from.state",
+    "carrier.carrier_name": "rates.0.provider",
+    "carrier.reliability_idx": "carrier_reliability",
+    "carrier.cost_volatility": "carrier_cost_volatility",
+    "delivery_partner.partner_name": "rates.0.provider",
+    "delivery_partner.partner_display_name": "rates.0.provider",
+    "delivery_partner.service_zone_id": "rates.0.zone",
+    "route.origin_id": "address_from.object_id",
+    "route.dest_id": "address_to.object_id",
+    "route.risk_score": "rates.0.risk_score",
+    "event.event_type": "status",
+    "event.timestamp_iso": "shipment_date",
+    "event.location_id": "address_from.object_id",
+    "event.location_kind": "FACILITY"
+  }
+}
