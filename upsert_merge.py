@@ -3,97 +3,32 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from decimal import Decimal
-from numbers import Integral
 import os
 import re
-import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from numbers import Integral
 from typing import Any, Dict, Iterable, List, Optional
 
 import psycopg2
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
 from config import load_project_env
-from upsert import (
-    CONSTRAINTS,
-    CYPHER_ENRICH_FACILITY_NAMES,
-    CYPHER_ENRICH_PARTNER_NAMES,
-    CYPHER_ENRICH_ROUTE_NAMES,
-    CYPHER_UPSERT_CARRIERS,
-    CYPHER_UPSERT_EVENTS,
-    CYPHER_UPSERT_EVENT_RELS,
-    CYPHER_UPSERT_FACILITIES,
-    CYPHER_UPSERT_ORDERS,
-    CYPHER_UPSERT_PARTNERS,
-    CYPHER_UPSERT_ROUTES,
-    CYPHER_UPSERT_SHIPMENT_RELS,
-    CYPHER_UPSERT_SHIPMENTS,
-    CYPHER_UPSERT_STAGE_BASELINES,
-    CYPHER_WIPE_TIMELINE_FOR_ORDERS,
-    REAL_CROSSDOCK_NAMES,
-    REAL_DC_NAMES,
-    REAL_PARTNER_NAMES,
-    REAL_PORT_NAMES,
-    chunked,
-)
-
 
 load_project_env()
 
-
-def _slug(value: Any) -> str:
-    text = str(value or "").strip()
-    text = re.sub(r"[^A-Za-z0-9]+", "_", text)
-    text = text.strip("_")
-    return text.lower() or "node"
+_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _as_bool(value: Any) -> bool:
-    return bool(value) if value is not None else False
+def _safe_label(value: Any, default: str = "Record") -> str:
+    """Validate a user-supplied label/relationship type before inlining it into Cypher."""
+    text = re.sub(r"[^A-Za-z0-9_]", "_", str(value or "").strip())
+    return text if _LABEL_RE.match(text) else default
 
 
-def _get_nested(mapping: Dict[str, Any], *keys: str) -> Any:
-    current: Any = mapping
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_optional_float(value: Any) -> Optional[float]:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-def _safe_neo4j_int(value: Any, default: int = 0) -> int:
-    if isinstance(value, str) and ("e" in value.lower() or "." in value):
-        try:
-            numeric_value = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return default
-        if not numeric_value.is_integer() or not -(2**63) <= numeric_value <= 2**63 - 1:
-            return default
-        value = numeric_value
-    try:
-        number = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-    if not -(2**63) <= number <= 2**63 - 1:
-        return default
-    return number
+def chunked(rows: List[Dict[str, Any]], batch_size: int) -> Iterable[List[Dict[str, Any]]]:
+    for i in range(0, len(rows), batch_size):
+        yield rows[i : i + batch_size]
 
 
 def _sanitize_neo4j_value(value: Any, path: str = "$") -> Any:
@@ -131,61 +66,6 @@ def _sanitize_neo4j_value(value: Any, path: str = "$") -> Any:
             for index, item in enumerate(value)
         ]
     return value
-
-
-def _pick_order_id(order: Dict[str, Any], default: str) -> str:
-    for key in ("order_id", "orderId", "id"):
-        if order.get(key):
-            return str(order[key])
-    return default
-
-
-def _pick_shipment_id(shipment: Dict[str, Any], default: str) -> str:
-    for key in ("shipment_id", "shipmentId", "id"):
-        if shipment.get(key):
-            return str(shipment[key])
-    return default
-
-
-def _pick_facility_id(facility: Dict[str, Any], default: str) -> str:
-    for key in ("facility_id", "facilityId", "id"):
-        if facility.get(key):
-            return str(facility[key])
-    return default
-
-
-def _pick_carrier_id(carrier: Dict[str, Any], default: str) -> str:
-    for key in ("carrier_id", "carrierId", "id"):
-        if carrier.get(key):
-            return str(carrier[key])
-    carrier_name = carrier.get("carrier_name") or carrier.get("name") or "UNKNOWN_CARRIER"
-    return f"CARRIER::{_slug(carrier_name)}"
-
-
-def _pick_partner_id(partner: Dict[str, Any], default: str) -> str:
-    for key in ("partner_id", "partnerId", "id"):
-        if partner.get(key):
-            return str(partner[key])
-    partner_name = partner.get("partner_name") or partner.get("partner_display_name") or "UNKNOWN_PARTNER"
-    return f"PARTNER::{_slug(partner_name)}"
-
-
-def _pick_route_id(route: Dict[str, Any], default: str) -> str:
-    for key in ("route_id", "routeId", "id"):
-        if route.get(key):
-            return str(route[key])
-    origin = route.get("origin_id") or route.get("originId") or "UNKNOWN_ORIGIN"
-    dest = route.get("dest_id") or route.get("destId") or "UNKNOWN_DEST"
-    return f"{origin}__{dest}"
-
-
-def _pick_event_id(event: Dict[str, Any], shipment_id: str) -> str:
-    for key in ("event_id", "eventId", "id"):
-        if event.get(key):
-            return str(event[key])
-    event_type = event.get("event_type") or "UNKNOWN_EVENT"
-    ts = event.get("timestamp_iso") or event.get("timestamp") or "1970-01-01T00:00:00Z"
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{shipment_id}|{event_type}|{ts}"))
 
 
 def _canonical_rows_from_postgres(
@@ -228,131 +108,77 @@ def _canonical_rows_from_postgres(
     return rows
 
 
-def _flatten_canonical_record(row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _extract_node_and_relationships(
+    row: Dict[str, Any],
+) -> tuple[str, Dict[str, Any], List[Dict[str, Any]]]:
+    """Turn one canonical row into a graph node plus its outgoing relationships,
+    driven entirely by entity.type/entity.id/entity.attributes and the
+    top-level relationships array. No entity shape is assumed."""
     payload = row.get("payload") or {}
     metadata = payload.get("metadata") or {}
     entity = payload.get("entity") or {}
-    attrs = entity.get("attributes") or {}
-
-    order = attrs.get("order") or {}
-    shipment = attrs.get("shipment") or {}
-    facility = attrs.get("facility") or {}
-    carrier = attrs.get("carrier") or {}
-    partner = attrs.get("delivery_partner") or {}
-    route = attrs.get("route") or {}
-    event = attrs.get("event") or {}
+    attributes = entity.get("attributes") or {}
+    if not isinstance(attributes, dict):
+        attributes = {}
 
     batch_id = str(row.get("batch_id") or metadata.get("batch_id") or "")
-    source_record_id = str(row.get("source_record_id") or metadata.get("source_record_id") or entity.get("id") or "")
+    source_record_id = str(row.get("source_record_id") or metadata.get("source_record_id") or "")
+    entity_id = str(entity.get("id") or source_record_id or f"RECORD::{row.get('id')}")
+    entity_type = _safe_label(entity.get("type") or metadata.get("source_entity"))
 
-    order_id = _pick_order_id(order, f"ORDER::{source_record_id or entity.get('id') or 'unknown'}")
-    shipment_id = _pick_shipment_id(shipment, f"SHIPMENT::{source_record_id or entity.get('id') or 'unknown'}")
-    facility_id = _pick_facility_id(facility, f"FACILITY::{source_record_id or entity.get('id') or 'unknown'}")
-    carrier_name = carrier.get("carrier_name") or carrier.get("name") or partner.get("partner_name") or partner.get("partner_display_name") or "UNKNOWN_CARRIER"
-    carrier_id = str(carrier.get("carrier_id") or f"CARRIER::{_slug(carrier_name)}")
-    partner_name = partner.get("partner_name") or partner.get("partner_display_name") or carrier_name or "UNKNOWN_PARTNER"
-    partner_id = str(partner.get("partner_id") or f"PARTNER::{_slug(partner_name)}")
-    origin_id = str(route.get("origin_id") or route.get("originId") or facility_id)
-    dest_id = str(route.get("dest_id") or route.get("destId") or order.get("customer_id") or f"CUSTOMER::{order_id}")
-    route_id = _pick_route_id(route, f"{origin_id}__{dest_id}")
-    event_id = _pick_event_id(event, shipment_id)
-
-    facility_geo = facility.get("geo_point") or {}
-    route_risk = _safe_float(route.get("risk_score"), 0.0)
-    carrier_rel = _safe_float(carrier.get("reliability_idx"), 0.0)
-    carrier_vol = _safe_float(carrier.get("cost_volatility"), 0.0)
-    partner_cap = _safe_float(partner.get("capacity_z"), 0.0)
-    partner_success = _safe_float(partner.get("success_rate_z"), 0.0)
-    dwell_sigma = _safe_float(shipment.get("dwell_time_sigma"), 0.0)
-    throughput_z = _safe_float(facility.get("throughput_z"), 0.0)
-    delta_hours = _safe_float(event.get("delta_t_hrs"), 0.0)
-
-    order_row = {
+    node = {
+        "id": entity_id,
         "batch_id": batch_id,
-        "order_id": order_id,
-        "erp_source": order.get("erp_source") or "GENERIC",
-        "customer_tier": order.get("customer_tier") or "STANDARD",
-        "order_value_usd": _safe_float(order.get("order_value_usd"), 0.0),
-        "original_promise_dt": order.get("original_promise_dt") or "",
-        "target_delivery_dt": order.get("target_delivery_dt") or "",
-        "estimated_delivery_dt": order.get("estimated_delivery_dt") or "",
-        "order_priority": _safe_neo4j_int(order.get("order_priority")),
-        "sla_health": order.get("sla_health") or "UNKNOWN",
+        "attributes": attributes,
     }
 
-    shipment_row = {
-        "batch_id": batch_id,
-        "shipment_id": shipment_id,
-        "order_id": order_id,
-        "carrier_id": carrier_id,
-        "facility_id": facility_id,
-        "route_id": route_id,
-        "partner_id": partner_id,
-        "tracking_number": shipment.get("tracking_number") or f"TRACK::{shipment_id}",
-        "dwell_time_sigma": dwell_sigma,
-        "arrival_eta": shipment.get("arrival_eta") or "",
-    }
+    relationships: List[Dict[str, Any]] = []
+    for rel in payload.get("relationships") or []:
+        if not isinstance(rel, dict):
+            continue
+        from_id = rel.get("from_id")
+        to_id = rel.get("to_id")
+        if from_id in (None, "") or to_id in (None, ""):
+            continue
+        relationships.append(
+            {
+                "type": _safe_label(rel.get("type"), default="RELATED_TO"),
+                "from_id": str(from_id),
+                "to_id": str(to_id),
+                "attributes": rel.get("attributes") or {},
+                "batch_id": batch_id,
+            }
+        )
 
-    facility_row = {
-        "batch_id": batch_id,
-        "facility_id": facility_id,
-        "facility_type": facility.get("facility_type") or "UNKNOWN",
-        "region_id": facility.get("region_id") or "REGION::UNKNOWN",
-        "geo_lat": _safe_optional_float(facility_geo.get("lat")),
-        "geo_lon": _safe_optional_float(facility_geo.get("lon")),
-        "throughput_z": throughput_z,
-        "status_flag": facility.get("status_flag") or "ACTIVE",
-    }
+    return entity_type, node, relationships
 
-    carrier_row = {
-        "batch_id": batch_id,
-        "carrier_id": carrier_id,
-        "carrier_name": carrier_name,
-        "reliability_idx": carrier_rel,
-        "cost_volatility": carrier_vol,
-    }
 
-    partner_row = {
-        "batch_id": batch_id,
-        "partner_id": partner_id,
-        "partner_name": partner_name,
-        "partner_display_name": partner.get("partner_display_name") or partner_name,
-        "service_zone_id": partner.get("service_zone_id") or "UNKNOWN_ZONE",
-        "capacity_z": partner_cap,
-        "success_rate_z": partner_success,
-    }
+def _node_cypher(label: str) -> str:
+    return f"""
+    UNWIND $rows AS row
+    MERGE (n:`{label}` {{id: row.id}})
+    SET n += row.attributes
+    SET n.batch_id = row.batch_id, n.updated_at = $now
+    RETURN count(n) AS written
+    """
 
-    route_row = {
-        "batch_id": batch_id,
-        "route_id": route_id,
-        "origin_id": origin_id,
-        "dest_id": dest_id,
-        "risk_score": route_risk,
-    }
 
-    event_row = {
-        "batch_id": batch_id,
-        "event_id": event_id,
-        "shipment_id": shipment_id,
-        "order_id": order_id,
-        "event_type": event.get("event_type") or "UNKNOWN",
-        "timestamp_iso": event.get("timestamp_iso") or event.get("timestamp") or "1970-01-01T00:00:00Z",
-        "audit_hash": event.get("audit_hash") or str(uuid.uuid4()),
-        "delta_t_hrs": delta_hours,
-        "location_id": event.get("location_id") or origin_id,
-        "location_kind": event.get("location_kind") or "FACILITY",
-        "exception_reason": event.get("exception_reason") or None,
-    }
+def _relationship_cypher(rel_type: str) -> str:
+    # MATCH (not MERGE) on both endpoints: a relationship only materializes
+    # once both entities have themselves been ingested as nodes.
+    return f"""
+    UNWIND $rows AS row
+    MATCH (a {{id: row.from_id}})
+    MATCH (b {{id: row.to_id}})
+    MERGE (a)-[r:`{rel_type}`]->(b)
+    SET r += row.attributes
+    SET r.batch_id = row.batch_id, r.updated_at = $now
+    RETURN count(r) AS written
+    """
 
-    return {
-        "orders": order_row,
-        "shipments": shipment_row,
-        "facilities": facility_row,
-        "carriers": carrier_row,
-        "partners": partner_row,
-        "routes": route_row,
-        "events": event_row,
-    }
+
+def _constraint_cypher(label: str) -> str:
+    return f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:`{label}`) REQUIRE n.id IS UNIQUE"
 
 
 def _neo4j_driver():
@@ -366,15 +192,19 @@ def _neo4j_driver():
     return GraphDatabase.driver(uri, auth=(user, password))
 
 
-def _run_upsert_chunk(session: Any, query: str, rows: List[Dict[str, Any]], now: str) -> None:
+def _run_upsert_chunk(session: Any, query: str, rows: List[Dict[str, Any]], now: str) -> int:
+    """Run one UNWIND batch and return how many nodes/relationships Neo4j actually wrote."""
+    written = 0
     if not rows:
-        return
+        return written
     for chunk in chunked(rows, 1000):
         safe_chunk = [
             _sanitize_neo4j_value(row, "rows")
             for row in chunk
         ]
-        session.run(query, rows=safe_chunk, now=now)
+        record = session.run(query, rows=safe_chunk, now=now).single()
+        written += int(record["written"]) if record else 0
+    return written
 
 
 def upsert_postgres_canonical_to_neo4j(
@@ -382,93 +212,51 @@ def upsert_postgres_canonical_to_neo4j(
     *,
     batch_id: Optional[str] = None,
     limit: Optional[int] = None,
-) -> Dict[str, int]:
-    """Pull canonical rows from PostgreSQL and upsert them as KG nodes/relationships."""
+) -> Dict[str, Any]:
+    """Pull canonical rows from PostgreSQL and upsert them as generic KG nodes and
+    relationships. Node labels and relationship types come entirely from each
+    record's entity.type and relationships array; no fixed entity shape is assumed."""
     rows = _canonical_rows_from_postgres(connection_string, batch_id=batch_id, limit=limit)
     if not rows:
-        return {
-            "orders": 0,
-            "shipments": 0,
-            "facilities": 0,
-            "carriers": 0,
-            "partners": 0,
-            "routes": 0,
-            "events": 0,
-        }
+        return {"nodes": 0, "relationships": 0, "labels": {}}
 
-    order_rows: List[Dict[str, Any]] = []
-    shipment_rows: List[Dict[str, Any]] = []
-    facility_rows: List[Dict[str, Any]] = []
-    carrier_rows: List[Dict[str, Any]] = []
-    partner_rows: List[Dict[str, Any]] = []
-    route_rows: List[Dict[str, Any]] = []
-    event_rows: List[Dict[str, Any]] = []
+    nodes_by_label: Dict[str, List[Dict[str, Any]]] = {}
+    rels_by_type: Dict[str, List[Dict[str, Any]]] = {}
 
     for row in rows:
-        flattened = _flatten_canonical_record(row)
-        order_rows.append(_sanitize_neo4j_value(flattened["orders"], "orders"))
-        shipment_rows.append(_sanitize_neo4j_value(flattened["shipments"], "shipments"))
-        facility_rows.append(_sanitize_neo4j_value(flattened["facilities"], "facilities"))
-        carrier_rows.append(_sanitize_neo4j_value(flattened["carriers"], "carriers"))
-        partner_rows.append(_sanitize_neo4j_value(flattened["partners"], "partners"))
-        route_rows.append(_sanitize_neo4j_value(flattened["routes"], "routes"))
-        event_rows.append(_sanitize_neo4j_value(flattened["events"], "events"))
+        entity_type, node, relationships = _extract_node_and_relationships(row)
+        nodes_by_label.setdefault(entity_type, []).append(_sanitize_neo4j_value(node, entity_type))
+        for rel in relationships:
+            rels_by_type.setdefault(rel["type"], []).append(_sanitize_neo4j_value(rel, rel["type"]))
 
     driver = _neo4j_driver()
-    now = str(__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat())
+    now = str(datetime.now(timezone.utc).isoformat())
+
+    nodes_written_by_label: Dict[str, int] = {}
+    relationships_written_by_type: Dict[str, int] = {}
 
     try:
         with driver.session() as session:
-            for statement in CONSTRAINTS:
-                session.run(statement)
-
-            _run_upsert_chunk(session, CYPHER_UPSERT_FACILITIES, facility_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_CARRIERS, carrier_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_PARTNERS, partner_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_ROUTES, route_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_ORDERS, order_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_SHIPMENTS, shipment_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_SHIPMENT_RELS, shipment_rows, now)
-
-            order_ids = sorted({row.get("order_id") for row in order_rows if row.get("order_id")})
-            if order_ids:
-                session.run(CYPHER_WIPE_TIMELINE_FOR_ORDERS, order_ids=order_ids).consume()
-
-            _run_upsert_chunk(session, CYPHER_UPSERT_EVENTS, event_rows, now)
-            _run_upsert_chunk(session, CYPHER_UPSERT_EVENT_RELS, event_rows, now)
-
-            session.run(
-                CYPHER_ENRICH_FACILITY_NAMES,
-                bid=batch_id or "",
-                dc_names=REAL_DC_NAMES,
-                port_names=REAL_PORT_NAMES,
-                crossdock_names=REAL_CROSSDOCK_NAMES,
-            )
-            session.run(
-                CYPHER_ENRICH_PARTNER_NAMES,
-                bid=batch_id or "",
-                partner_names=REAL_PARTNER_NAMES,
-            )
-            session.run(CYPHER_ENRICH_ROUTE_NAMES, bid=batch_id or "")
-
-            rec = session.run(CYPHER_UPSERT_STAGE_BASELINES, now=now).single()
-            if rec is not None:
-                print(
-                    f"✅ StageBaseline upserted: {int(rec.get('n_baselines') or 0)} groups from {int(rec.get('n_events') or 0)} events"
+            for label in nodes_by_label:
+                session.run(_constraint_cypher(label))
+            for label, node_rows in nodes_by_label.items():
+                nodes_written_by_label[label] = _run_upsert_chunk(session, _node_cypher(label), node_rows, now)
+            for rel_type, rel_rows in rels_by_type.items():
+                relationships_written_by_type[rel_type] = _run_upsert_chunk(
+                    session, _relationship_cypher(rel_type), rel_rows, now
                 )
     finally:
         driver.close()
 
-    counts = {
-        "orders": len(order_rows),
-        "shipments": len(shipment_rows),
-        "facilities": len(facility_rows),
-        "carriers": len(carrier_rows),
-        "partners": len(partner_rows),
-        "routes": len(route_rows),
-        "events": len(event_rows),
+    relationships_submitted = sum(len(v) for v in rels_by_type.values())
+    relationships_written = sum(relationships_written_by_type.values())
+
+    return {
+        "nodes": sum(nodes_written_by_label.values()),
+        "relationships": relationships_written,
+        "relationships_skipped_missing_endpoint": relationships_submitted - relationships_written,
+        "labels": nodes_written_by_label,
     }
-    return counts
 
 
 def main() -> None:
@@ -487,10 +275,14 @@ def main() -> None:
     limit = None if args.limit <= 0 else args.limit
     rows = _canonical_rows_from_postgres(connection_string, batch_id=args.batch_id or None, limit=limit)
     if args.dry_run:
+        sample = None
+        if rows:
+            entity_type, node, relationships = _extract_node_and_relationships(rows[0])
+            sample = {"label": entity_type, "node": node, "relationships": relationships}
         print({
             "row_count": len(rows),
             "batch_id_filter": args.batch_id or "(all)",
-            "sample": _flatten_canonical_record(rows[0]) if rows else None,
+            "sample": sample,
         })
         return
 

@@ -68,44 +68,66 @@ def remove_numeric_outliers(
 def normalize_record(staged: dict[str, Any]) -> dict[str, Any]:
     source = clean_values(staged["source_payload"])
     enriched = clean_values(staged["enriched_attributes"])
-    shipment_id = enriched["entity_id"]
+    entity_id = enriched.get("entity_id") or ""
     source_system = staged.get("source_system", "shippo")
     source_entity = staged.get("source_entity", "shipments")
     metadata = {
         "batch_id": staged["source_payload"].get("batch_id", ""),
         "source_system": source_system,
         "source_entity": source_entity,
-        "source_record_id": shipment_id,
+        "source_record_id": entity_id,
         "extracted_at": source.get("object_created") or source.get("updated_at", ""),
         "updated_at": source.get("object_updated") or source.get("updated_at", ""),
     }
+
+    if "attributes" in enriched:
+        # Generic mapping-driven path: entity shape is whatever the mapping
+        # config declared, not assumed to be order/shipment/facility/etc.
+        entity_type = enriched.get("entity_type") or source_entity or "record"
+        schema_version = enriched.get("schema_version") or "custom.v1"
+        attributes = dict(enriched["attributes"])
+        attributes["batch_id"] = enriched.get("batch_id")
+        attributes["erp_source"] = enriched.get("erp_source")
+        relationships = enriched.get("relationships") or []
+        derived = enriched.get("derived", {})
+    else:
+        # Legacy demo path used only when no mapping config is configured.
+        entity_type = "shipment"
+        schema_version = "otc.v1"
+        attributes = {
+            "batch_id": enriched.get("batch_id"),
+            "erp_source": enriched.get("erp_source"),
+            "order": enriched.get("order", {}),
+            "shipment": enriched.get("shipment", {}),
+            "facility": enriched.get("facility", {}),
+            "carrier": enriched.get("carrier", {}),
+            "delivery_partner": enriched.get("delivery_partner", {}),
+            "route": enriched.get("route", {}),
+            "event": enriched.get("event", {}),
+        }
+        route = enriched.get("route") or {}
+        relationships = []
+        if route.get("origin_id") and route.get("dest_id"):
+            relationships = [
+                {
+                    "type": "SHIPS_TO",
+                    "from_id": route["origin_id"],
+                    "to_id": route["dest_id"],
+                    "attributes": {},
+                }
+            ]
+        derived = enriched.get("derived", {})
+
     record = {
-        "schema_version": "otc.v1",
+        "schema_version": schema_version,
         "metadata": metadata,
         "entity": {
-            "type": "shipment",
-            "id": shipment_id,
-            "attributes": {
-                "batch_id": enriched.get("batch_id"),
-                "erp_source": enriched["erp_source"],
-                "order": enriched["order"],
-                "shipment": enriched["shipment"],
-                "facility": enriched["facility"],
-                "carrier": enriched["carrier"],
-                "delivery_partner": enriched["delivery_partner"],
-                "route": enriched["route"],
-                "event": enriched["event"],
-            },
+            "type": entity_type,
+            "id": entity_id,
+            "attributes": attributes,
         },
-        "relationships": [
-            {
-                "type": "SHIPS_TO",
-                "from_id": enriched["route"]["origin_id"],
-                "to_id": enriched["route"]["dest_id"],
-                "attributes": {},
-            }
-        ],
-        "derived": enriched["derived"],
+        "relationships": relationships,
+        "derived": derived,
     }
     return apply_canonical_schema(record)
 

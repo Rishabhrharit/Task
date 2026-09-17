@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,62 +84,69 @@ def map_payload_to_canonical(
     source_entity: str,
     batch_id: str,
 ) -> dict[str, Any]:
-    """Apply a declarative field map to a source payload and emit canonical attributes."""
+    """Apply a declarative field map to any source payload and emit a generic
+    canonical envelope. No entity shape (order/shipment/etc.) is assumed; the
+    mapping config alone decides what attributes and relationships exist.
+
+    Mapping config keys:
+      - "source.entity_id": dotted path to the record's unique identifier.
+      - "canonical": {dotted attribute key: source path} -> becomes entity attributes.
+      - "entity_type": optional node label / entity.type (defaults to source_entity).
+      - "relationships": optional list of
+            {"type": "REL_TYPE", "from": "attr.path", "to": "attr.path"}
+        where "from"/"to" reference keys already produced under "canonical"
+        (or the literal "entity_id").
+      - "schema_version": optional override for the canonical envelope version.
+    """
     source_map = mapping.get("source", {})
     canonical_shape = mapping.get("canonical", {})
     if not isinstance(canonical_shape, dict):
         raise ValueError("The mapping config must contain a 'canonical' object.")
 
-    result: dict[str, Any] = {
-        "batch_id": batch_id,
-        "erp_source": source_system.upper(),
-        "entity_id": _coalesce(
-            resolve_path(payload, source_map.get("entity_id")),
-            resolve_path(payload, source_map.get("order_id")),
-            resolve_path(payload, source_map.get("shipment_id")),
-            "UNKNOWN_ENTITY",
-        ),
-    }
+    entity_id = _coalesce(
+        resolve_path(payload, source_map.get("entity_id")),
+        resolve_path(payload, source_map.get("id")),
+        "UNKNOWN_ENTITY",
+    )
 
+    attributes: dict[str, Any] = {}
     for canonical_key, source_path in canonical_shape.items():
         value = resolve_path(payload, source_path)
         if value is None:
             continue
-        _deep_set(result, canonical_key, value)
+        _deep_set(attributes, canonical_key, value)
 
-    if "order" not in result:
-        result["order"] = {}
-    if "shipment" not in result:
-        result["shipment"] = {}
-    if "facility" not in result:
-        result["facility"] = {}
-    if "carrier" not in result:
-        result["carrier"] = {}
-    if "delivery_partner" not in result:
-        result["delivery_partner"] = {}
-    if "route" not in result:
-        result["route"] = {}
-    if "event" not in result:
-        result["event"] = {}
+    relationships: list[dict[str, Any]] = []
+    for rel in mapping.get("relationships") or []:
+        if not isinstance(rel, dict):
+            continue
+        rel_type = rel.get("type")
+        from_key = rel.get("from")
+        to_key = rel.get("to")
+        from_value = str(entity_id) if from_key == "entity_id" else resolve_path(attributes, from_key)
+        to_value = str(entity_id) if to_key == "entity_id" else resolve_path(attributes, to_key)
+        if not rel_type or from_value in (None, "") or to_value in (None, ""):
+            continue
+        relationships.append(
+            {
+                "type": str(rel_type),
+                "from_id": str(from_value),
+                "to_id": str(to_value),
+                "attributes": {},
+            }
+        )
 
-    if "order_id" in result and "order" in result:
-        result["order"]["order_id"] = result["order_id"]
-    if "shipment_id" in result and "shipment" in result:
-        result["shipment"]["shipment_id"] = result["shipment_id"]
-    if "carrier_name" in result and "carrier" in result:
-        result["carrier"]["carrier_name"] = result["carrier_name"]
-    if "partner_name" in result and "delivery_partner" in result:
-        result["delivery_partner"]["partner_name"] = result["partner_name"]
-    if "facility_id" in result and "facility" in result:
-        result["facility"]["facility_id"] = result["facility_id"]
-    if "route_origin" in result and "route" in result:
-        result["route"]["origin_id"] = result["route_origin"]
-    if "route_dest" in result and "route" in result:
-        result["route"]["dest_id"] = result["route_dest"]
-
-    result["derived"] = {
-        "fields": {},
-        "calculation": f"Mapped from {source_system}.{source_entity} using declarative source mapping.",
-        "calculated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+    return {
+        "batch_id": str(batch_id),
+        "erp_source": source_system.upper(),
+        "entity_id": str(entity_id),
+        "entity_type": str(mapping.get("entity_type") or source_entity or "record"),
+        "schema_version": str(mapping.get("schema_version") or "custom.v1"),
+        "attributes": attributes,
+        "relationships": relationships,
+        "derived": {
+            "fields": {},
+            "calculation": f"Mapped from {source_system}.{source_entity} using declarative source mapping.",
+            "calculated_at": datetime.now(timezone.utc).isoformat(),
+        },
     }
-    return result
