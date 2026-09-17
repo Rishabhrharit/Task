@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from decimal import Decimal
+from numbers import Integral
 import os
 import re
 import uuid
@@ -98,11 +100,21 @@ def _sanitize_neo4j_value(value: Any, path: str = "$") -> Any:
     """Keep values sent through the Neo4j driver within supported numeric ranges."""
     if isinstance(value, bool):
         return value
-    if isinstance(value, int):
-        if -(2**63) <= value <= 2**63 - 1:
-            return value
+    if isinstance(value, Integral):
+        integer_value = int(value)
+        if -(2**63) <= integer_value <= 2**63 - 1:
+            return integer_value
         print(f"Warning: replaced out-of-range integer at {path} with 0")
         return 0
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            print(f"Warning: replaced non-finite decimal at {path} with null")
+            return None
+        as_float = float(value)
+        if math.isfinite(as_float):
+            return as_float
+        print(f"Warning: replaced out-of-range decimal at {path} with null")
+        return None
     if isinstance(value, float):
         if math.isfinite(value):
             return value
@@ -358,7 +370,11 @@ def _run_upsert_chunk(session: Any, query: str, rows: List[Dict[str, Any]], now:
     if not rows:
         return
     for chunk in chunked(rows, 1000):
-        session.run(query, rows=chunk, now=now)
+        safe_chunk = [
+            _sanitize_neo4j_value(row, "rows")
+            for row in chunk
+        ]
+        session.run(query, rows=safe_chunk, now=now)
 
 
 def upsert_postgres_canonical_to_neo4j(

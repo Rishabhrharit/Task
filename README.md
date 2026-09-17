@@ -19,6 +19,8 @@ The main workflow is:
 Shippo test API
       |
       v
+MinIO otc-raw bucket            Immutable source landing JSON
+  |
 raw.api_records                 Original shipment and transaction JSON
       |
       v
@@ -41,17 +43,18 @@ again.
 
 | Path | Purpose |
 | --- | --- |
-| `app/streamlit_app.py` | Streamlit control panel and pipeline controls |
-| `ingestion/shippo_client.py` | Shippo test shipment/transaction ingestion and raw persistence |
-| `ingestion/shipment_request.example.json` | Safe example request body sent to Shippo |
-| `ingestion/odoo_client.py` | Odoo Community stock-picking ingestion |
-| `ingestion/generic_rest.py` | Configurable REST API ingestion template |
+| `app/streamlit_app.py` | Streamlit control panel; runs the default pipeline via Prefect |
+| `orchestration/flows.py` | Prefect flow: MinIO ingest -> Parquet -> Postgres -> Neo4j |
+| `ingestion/generic_rest.py` | Configurable REST API ingestion (Shippo, custom APIs) |
+| `ingestion/object_storage.py` | MinIO/S3 landing-zone upload helpers |
+| `ingestion/raw_parquet.py` | Converts MinIO landing batches to Parquet; hydrates Postgres |
 | `ingestion/runner.py` | Legacy local ERP-shaped API ingestion prototype |
 | `source_api/app/main.py` | FastAPI synthetic `/orders` source |
-| `transformation/preprocess.py` | Builds staging records from raw Shippo shipments |
+| `transformation/preprocess.py` | Builds staging records from raw shipments |
 | `transformation/enrichment.py` | Adds deterministic canonical attributes |
 | `transformation/normalize.py` | Cleans, filters, and writes `otc.v1` records |
 | `transformation/field_provenance.yaml` | Field-level source and derivation rules |
+| `upsert_merge.py` | Loads canonical Postgres rows into Neo4j |
 | `database/raw.sql` | PostgreSQL raw schema |
 | `database/staging.sql` | PostgreSQL staging schema |
 | `database/canonical.sql` | PostgreSQL canonical schema |
@@ -67,7 +70,6 @@ interfaces.
 - Python 3.11 or a compatible recent Python version
 - PostgreSQL with permission to create schemas and tables
 - A Shippo test-mode API token
-- An Odoo Community instance with XML-RPC access (for the Odoo path)
 - Windows PowerShell, macOS/Linux shell, or an equivalent terminal
 
 The Python dependencies are pinned in
@@ -95,11 +97,11 @@ Set these environment variables before running the application or CLI:
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL connection string, for example `postgresql://user:password@localhost:5432/otc` |
 | `SHIPPO_API_TOKEN` | Yes for ingestion | Shippo test-mode token |
-| `ODOO_URL` | Yes for Odoo ingestion | Odoo base URL, for example `http://localhost:8069` |
-| `ODOO_DB` | Yes for Odoo ingestion | Odoo database name |
-| `ODOO_USERNAME` | Yes for Odoo ingestion | Odoo user login |
-| `ODOO_PASSWORD` | Yes for Odoo ingestion | Odoo password or API key |
-| `ODOO_LIMIT` | No | Maximum pickings and orders per run; default `100` |
+| `MINIO_ENDPOINT` | Optional | S3-compatible endpoint, for example `http://localhost:9000`; enables the landing zone |
+| `MINIO_ACCESS_KEY` | With MinIO | MinIO application access key; local development may use the root user |
+| `MINIO_SECRET_KEY` | With MinIO | MinIO secret key; do not commit it |
+| `MINIO_BUCKET` | With MinIO | Private landing bucket, default `otc-raw` |
+| `MINIO_SECURE` | With MinIO | Set to `true` for HTTPS, default `false` |
 | `CANONICAL_SCHEMA_PATH` | No | JSON Schema used to project and validate canonical output |
 
 All components load configuration from the repository-root `.env` file.
@@ -209,14 +211,14 @@ than silently treating a run as successful.
 The same stages can be run without Streamlit:
 
 ```powershell
-python -m ingestion.shippo_client ingestion\shipment_request.example.json
+python -m ingestion.generic_rest --config path\to\shippo_config.json
 python -m transformation.preprocess
 python -m transformation.normalize
 ```
 
-The ingestion module command above submits one request to its default
-`shipments/` endpoint. To create a selected number of shipments and their
-transactions, use the Python API used by the UI or run the UI itself.
+Shippo ingestion runs through the generic REST connector (endpoint
+`https://api.goshippo.com/shipments/`, token prefix `ShippoToken`), the same
+path the Streamlit sidebar uses.
 
 Each transformation command reads `DATABASE_URL`, writes to PostgreSQL, and
 prints the number of records written. The preprocessing stage reads
@@ -282,44 +284,20 @@ therefore changes the published shape through the schema, without changing
 normalization instead of being published as valid canonical data. See
 `canonical.schema.example.json` for the expected format.
 
-### Ingest Odoo Community
-
-Configure the Odoo instance in the ignored environment file:
-
-```dotenv
-ODOO_URL=http://localhost:8069
-ODOO_DB=odoo
-ODOO_USERNAME=admin@example.com
-ODOO_PASSWORD=your_odoo_password_or_api_key
-ODOO_LIMIT=100
-```
-
-Then run:
-
-```powershell
-python -m ingestion.odoo_client
-python -m transformation.preprocess
-python -m transformation.normalize
-```
-
-The connector reads Odoo `stock.picking` records and joins matching
-`sale.order` records. It maps the Odoo picking name to `shipment_id`, the
-origin to `order_id`, carrier tracking reference, carrier, customer, warehouse,
-status, scheduled dates, order value, currency, and source update timestamp.
-
 ## Transformation and data lineage
 
 ### Ingestion
 
-`ingestion/shippo_client.py`:
+`ingestion/generic_rest.py` (the default connector, used for Shippo and any
+other REST source):
 
-- Generates a new UUID batch for each stored response.
-- Sends the example shipment payload to `https://api.goshippo.com`.
-- Uses the `SHIPPO_API_TOKEN` in the `ShippoToken` authorization header.
-- Stores the complete response before raising an HTTP error.
-- Stores shipment responses under `source_entity = shipments` and transaction
-  responses under `source_entity = transactions`.
-- Uses the first returned rate to create a synchronous transaction request.
+- Generates a new UUID batch per run.
+- Lands the raw response in the MinIO `otc-raw` bucket when `MINIO_ENDPOINT`
+  is configured.
+- Uses `ingestion/raw_parquet.py` to convert the landing batch to Parquet and
+  hydrate `raw.api_records` in Postgres from that Parquet file.
+- Falls back to writing `raw.api_records` directly when MinIO is not
+  configured.
 
 ### Preprocessing and enrichment
 

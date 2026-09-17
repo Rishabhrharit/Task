@@ -20,10 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import load_project_env
-from ingestion import generic_rest
-from transformation import normalize as canonical_normalize
-from transformation import preprocess
-from upsert_merge import upsert_postgres_canonical_to_neo4j
+from orchestration.flows import otc_pipeline_flow
 
 load_project_env()
 
@@ -236,7 +233,8 @@ def run_custom_api_graph_pipeline(
             token_prefix = f"{auth_prefix.strip()} "
             if normalized_token.lower().startswith(token_prefix.lower()):
                 normalized_token = normalized_token[len(token_prefix):].strip()
-            batch_id = generic_rest.ingest_from_config(
+            # Default pipeline: MinIO landing -> Parquet -> Postgres -> Neo4j, via Prefect.
+            return otc_pipeline_flow(
                 config={
                     "endpoint": normalized_api_url,
                     "source_system": source_system,
@@ -252,21 +250,6 @@ def run_custom_api_graph_pipeline(
                 },
                 max_records=max_records,
             )
-            staged_ids = preprocess.preprocess_records(connection_string, batch_id=batch_id)
-            canonical_count = canonical_normalize.normalize_staged_records(
-                connection_string,
-                batch_id=batch_id,
-            )
-            graph_summary = upsert_postgres_canonical_to_neo4j(
-                connection_string,
-                batch_id=batch_id,
-            )
-            return {
-                "batch_id": batch_id,
-                "staged_rows": len(staged_ids),
-                "canonical_rows": canonical_count,
-                "neo4j_rows": graph_summary,
-            }
         finally:
             if previous_mapping_path is None:
                 os.environ.pop("SOURCE_MAPPING_PATH", None)

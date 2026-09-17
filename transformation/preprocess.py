@@ -13,6 +13,7 @@ import psycopg2
 import yaml
 
 from config import load_project_env
+from ingestion.raw_parquet import hydrate_from_parquet
 from transformation.enrichment import enrich_order, enrich_shipment
 from transformation.generic_mapper import map_payload_to_canonical, load_mapping_config
 
@@ -64,6 +65,7 @@ def build_enriched_attributes(
 def preprocess_records(connection_string: str, batch_id: str | None = None) -> list[int]:
     mapping_path = os.getenv("SOURCE_MAPPING_PATH") or os.getenv("MAPPING_CONFIG_PATH")
     with psycopg2.connect(connection_string) as connection:
+        hydrate_from_parquet(connection, batch_id)
         with connection.cursor() as cursor:
             query = """
                 SELECT id, batch_id, source_system, source_entity,

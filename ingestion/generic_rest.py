@@ -14,6 +14,7 @@ import psycopg2
 import psycopg2.extras
 import requests
 from config import load_project_env
+from ingestion.object_storage import minio_enabled, upload_landing_records
 
 load_project_env()
 
@@ -149,15 +150,34 @@ def ingest_from_config(
             raise ValueError("max_records must be at least 1.")
         records = records[:max_records]
     batch_id = str(uuid.uuid4())
+    extracted_at = datetime.now(timezone.utc)
+    landing_records: list[dict[str, Any]] = []
+    for record in records:
+        source_record_id = record.get(id_field)
+        if source_record_id in (None, ""):
+            raise ValueError(f"Record is missing configured identifier field '{id_field}'.")
+        landing_records.append(
+            {
+                "source_record_id": str(source_record_id),
+                "extracted_at": extracted_at.isoformat(),
+                "payload": record,
+                "ingestion_status": "SUCCESS",
+                "error_message": None,
+            }
+        )
+    if minio_enabled():
+        upload_landing_records(
+            batch_id=batch_id,
+            source_system=source_system,
+            source_entity=source_entity,
+            records=landing_records,
+        )
+        return batch_id
     connection = database_connection()
     try:
         with connection.cursor() as cursor:
             for record in records:
                 source_record_id = record.get(id_field)
-                if source_record_id in (None, ""):
-                    raise ValueError(
-                        f"Record is missing configured identifier field '{id_field}'."
-                    )
                 cursor.execute(
                     """
                     INSERT INTO raw.api_records (
