@@ -1,43 +1,53 @@
-# OTC Data Preparation Pipeline
+# Generic Data-to-Graph Pipeline
 
-This project is a small, auditable order-to-cash (OTC) data preparation
-pipeline. It creates test shipments with the Shippo API, keeps the original
-API responses unchanged, enriches those responses with deterministic
-application attributes, and publishes a stable `otc.v1` canonical record for
-each shipment.
+This project is a small, auditable, entity-agnostic data pipeline. It ingests
+records from any REST API, keeps the original source payload unchanged, maps
+it to a canonical attribute shape you declare, and upserts the result into
+Neo4j as a knowledge graph. Nothing in the pipeline assumes a specific entity
+type (orders, shipments, invoices, customers, ...): the node label, its
+attributes, and its relationships are all driven by a declarative mapping
+config and a JSON Schema that you supply per data source.
 
 The project is designed to make the boundary between source data, derived
 data, and synthetic demonstration data explicit. PostgreSQL is the system of
-record for every pipeline layer, and the Streamlit application provides a
-control panel for running the pipeline and inspecting its output.
+record for every pipeline layer, MinIO is the immutable raw landing zone,
+Prefect orchestrates the pipeline stages, and the Streamlit application
+provides a control panel for running the pipeline and inspecting its output.
 
 ## What the project does
 
-The main workflow is:
+The default pipeline, orchestrated by Prefect
+([`orchestration/flows.py`](orchestration/flows.py)), is:
 
 ```text
-Shippo test API
+Any REST API source
       |
       v
-MinIO otc-raw bucket            Immutable source landing JSON
-  |
-raw.api_records                 Original shipment and transaction JSON
+MinIO otc-raw bucket            Immutable raw JSON landing object
       |
       v
-staging.preprocessed_records   Source payload + enrichment + provenance
+Parquet twin (MinIO)            Columnar replay copy of the same batch
       |
       v
-canonical.otc_records          Normalized otc.v1 shipment contract
+raw.api_records (Postgres)      Hydrated from the Parquet twin
       |
       v
-Streamlit control panel         Tables and JSON views for both layers
+staging.preprocessed_records    Source payload + mapped attributes + provenance
+      |
+      v
+canonical.otc_records            entity.type / entity.id / attributes / relationships
+      |
+      v
+Neo4j graph                     Node label = entity.type; edges from "relationships"
+      |
+      v
+Streamlit control panel          Runs the flow and renders the resulting graph
 ```
 
 Each run is tracked with a UUID `batch_id`. The ingestion layer stores both
 successful and failed responses with an ingestion status and optional error
-message. Later stages process only successful Shippo shipment records and are
-idempotent: records already represented in the next layer are not inserted
-again.
+message. Later stages are idempotent: records already represented in the next
+layer are not inserted again.
 
 ## Repository layout
 
@@ -45,31 +55,34 @@ again.
 | --- | --- |
 | `app/streamlit_app.py` | Streamlit control panel; runs the default pipeline via Prefect |
 | `orchestration/flows.py` | Prefect flow: MinIO ingest -> Parquet -> Postgres -> Neo4j |
-| `ingestion/generic_rest.py` | Configurable REST API ingestion (Shippo, custom APIs) |
+| `ingestion/generic_rest.py` | Configurable REST API ingestion for any source |
 | `ingestion/object_storage.py` | MinIO/S3 landing-zone upload helpers |
 | `ingestion/raw_parquet.py` | Converts MinIO landing batches to Parquet; hydrates Postgres |
 | `ingestion/runner.py` | Legacy local ERP-shaped API ingestion prototype |
 | `source_api/app/main.py` | FastAPI synthetic `/orders` source |
-| `transformation/preprocess.py` | Builds staging records from raw shipments |
-| `transformation/enrichment.py` | Adds deterministic canonical attributes |
-| `transformation/normalize.py` | Cleans, filters, and writes `otc.v1` records |
-| `transformation/field_provenance.yaml` | Field-level source and derivation rules |
-| `upsert_merge.py` | Loads canonical Postgres rows into Neo4j |
+| `transformation/preprocess.py` | Builds staging records; applies the source mapping |
+| `transformation/generic_mapper.py` | Declarative payload -> canonical attribute/relationship mapper |
+| `transformation/enrichment.py` | Legacy demo enrichment, used only when no mapping is configured |
+| `transformation/normalize.py` | Builds the canonical entity/attributes/relationships envelope |
+| `transformation/canonical_schema.py` | Projects and validates canonical output against your JSON Schema |
+| `transformation/field_provenance.yaml` | Field-level source and derivation rules for the legacy demo path |
+| `upsert_merge.py` | Loads canonical Postgres rows into Neo4j as generic nodes/relationships |
 | `database/raw.sql` | PostgreSQL raw schema |
 | `database/staging.sql` | PostgreSQL staging schema |
 | `database/canonical.sql` | PostgreSQL canonical schema |
 
 The `source_api` and `ingestion/runner.py` files represent an ERP-shaped
-orders path. It is intentionally local and deterministic so the pipeline can
-be tested against a second, non-Shippo schema. A live SAP or Oracle connector
-can replace its HTTP URL without changing the raw, staging, or canonical
-interfaces.
+orders path, kept as a second test harness with a schema different from a
+plain REST API. A live SAP or Oracle connector can replace its HTTP URL
+without changing the raw, staging, or canonical interfaces.
 
 ## Prerequisites
 
 - Python 3.11 or a compatible recent Python version
 - PostgreSQL with permission to create schemas and tables
-- A Shippo test-mode API token
+- MinIO (or another S3-compatible store) for the raw landing zone
+- A Neo4j instance (AuraDB or self-hosted) for the graph output
+- Credentials for whichever REST API you are ingesting
 - Windows PowerShell, macOS/Linux shell, or an equivalent terminal
 
 The Python dependencies are pinned in
@@ -96,12 +109,15 @@ Set these environment variables before running the application or CLI:
 | Variable | Required | Description |
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL connection string, for example `postgresql://user:password@localhost:5432/otc` |
-| `SHIPPO_API_TOKEN` | Yes for ingestion | Shippo test-mode token |
+| `NEO4J_URI` | Yes | Neo4j connection URI, for example `neo4j+s://<instance>.databases.neo4j.io` |
+| `NEO4J_USERNAME` | Yes | Neo4j username |
+| `NEO4J_PASSWORD` | Yes | Neo4j password |
 | `MINIO_ENDPOINT` | Optional | S3-compatible endpoint, for example `http://localhost:9000`; enables the landing zone |
 | `MINIO_ACCESS_KEY` | With MinIO | MinIO application access key; local development may use the root user |
 | `MINIO_SECRET_KEY` | With MinIO | MinIO secret key; do not commit it |
 | `MINIO_BUCKET` | With MinIO | Private landing bucket, default `otc-raw` |
 | `MINIO_SECURE` | With MinIO | Set to `true` for HTTPS, default `false` |
+| `SOURCE_MAPPING_PATH` | No | Path to the declarative source-to-canonical mapping JSON for the current source |
 | `CANONICAL_SCHEMA_PATH` | No | JSON Schema used to project and validate canonical output |
 
 All components load configuration from the repository-root `.env` file.
@@ -123,7 +139,9 @@ DB_PORT=5432
 DB_NAME=otc_platform
 DB_USER=postgres
 DB_PASSWORD=your_local_postgres_password
-SHIPPO_API_TOKEN=shippo_test_your_token
+NEO4J_URI=neo4j+s://your-instance.databases.neo4j.io
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your_neo4j_password
 ```
 
 Keep the real values local; `.env` is ignored by Git and must never be
@@ -133,13 +151,14 @@ PowerShell example:
 
 ```powershell
 $env:DATABASE_URL = "postgresql://postgres:password@localhost:5432/otc"
-$env:SHIPPO_API_TOKEN = "shippo_test_..."
+$env:NEO4J_URI = "neo4j+s://your-instance.databases.neo4j.io"
+$env:NEO4J_USERNAME = "neo4j"
+$env:NEO4J_PASSWORD = "your_neo4j_password"
 ```
 
-If `SHIPPO_API_TOKEN` is not configured, the Streamlit sidebar provides a
-password field where you can enter a Shippo test token for the current
-session. The value is not written to the repository or database. A valid
-Shippo test-mode token is still required; the application cannot create one.
+The Streamlit sidebar also has fields for the API URL and token of whichever
+REST source you are ingesting for the current run; those values are not
+written to the repository or database.
 
 Replace `user`, `password`, `otc`, and the host with the credentials and
 database that actually exist on your PostgreSQL server. The values in the
@@ -189,41 +208,49 @@ Start the control panel from the repository root:
 streamlit run app\streamlit_app.py
 ```
 
-In the browser:
+In the browser sidebar, under **Custom REST API**:
 
-1. Set the number of test shipments in the sidebar (1-100).
-2. Select **Ingest from Shippo**.
-3. The application clears the previous raw, staging, and canonical output,
-   creates that many test shipments, and stores each shipment response.
-4. For each shipment, it selects the first Shippo rate, creates a
-   transaction/label request, and stores the transaction response in the raw
-   layer.
-5. The successful shipment rows are preprocessed into staging.
-6. Select **Normalize to otc.v1**.
-7. Inspect preprocessed rows in the staging tab and flattened/canonical JSON
-   rows in the canonical tab.
+1. Enter the **API URL** of the source you want to ingest.
+2. Enter the **API token** (or leave blank for an unauthenticated source).
+3. Set **Source system**, **Source entity**, **Record ID field**, and
+   optionally a **Records path** if the response wraps its array.
+4. Paste your **Source-to-canonical mapping JSON** (see
+   [Add a new REST API source](#add-a-new-rest-api-source) below).
+5. Paste your **Canonical JSON Schema**.
+6. Click **Map API -> Postgres -> Neo4j**.
 
-The UI reports missing configuration and Shippo or PostgreSQL errors rather
-than silently treating a run as successful.
+That button runs the full default pipeline as one Prefect flow
+(`otc_pipeline_flow` in [`orchestration/flows.py`](orchestration/flows.py)):
+ingest to MinIO, convert to Parquet, hydrate and preprocess in Postgres,
+normalize to the canonical envelope, then upsert into Neo4j as generic nodes
+and relationships. The graph view below the sidebar refreshes from Neo4j
+after the run completes.
+
+The UI reports missing configuration and upstream errors rather than
+silently treating a run as successful.
 
 ## Running the stages from the command line
 
 The same stages can be run without Streamlit:
 
 ```powershell
-python -m ingestion.generic_rest --config path\to\shippo_config.json
+python -m ingestion.generic_rest --config path\to\source_config.json
 python -m transformation.preprocess
 python -m transformation.normalize
+python -m upsert_merge
 ```
 
-Shippo ingestion runs through the generic REST connector (endpoint
-`https://api.goshippo.com/shipments/`, token prefix `ShippoToken`), the same
-path the Streamlit sidebar uses.
+Or run the whole flow at once through Prefect:
+
+```powershell
+python -m orchestration.flows
+```
 
 Each transformation command reads `DATABASE_URL`, writes to PostgreSQL, and
-prints the number of records written. The preprocessing stage reads
-`transformation/field_provenance.yaml` on every run, so provenance changes are
-captured in the staging payload.
+prints the number of records written. Preprocessing applies the mapping at
+`SOURCE_MAPPING_PATH` when one is configured; otherwise it falls back to the
+legacy demo enrichment described in
+[Preprocessing and enrichment](#preprocessing-and-enrichment).
 
 ### Ingest the ERP-shaped API
 
@@ -258,21 +285,49 @@ Configure `API_URL`, `API_TOKEN`, `SOURCE_SYSTEM`, `SOURCE_ENTITY`, and
 `API_ID_FIELD`. If the response is wrapped, set `API_RECORDS_PATH`, such as
 `data.items`. The connector supports bearer tokens and custom token headers.
 
+Write a mapping JSON (referenced by `SOURCE_MAPPING_PATH`, or pasted directly
+into the Streamlit sidebar) that declares your entity shape. Nothing in the
+pipeline assumes orders or shipments; the mapping alone decides what gets
+ingested:
+
+```json
+{
+  "source": { "entity_id": "id" },
+  "entity_type": "Invoice",
+  "canonical": {
+    "amount_due": "totals.due",
+    "customer_id": "customer.id"
+  },
+  "relationships": [
+    { "type": "BILLED_TO", "from": "entity_id", "to": "customer_id" }
+  ]
+}
+```
+
+- `source.entity_id`: dotted path to the record's unique identifier.
+- `entity_type`: the Neo4j node label (`entity.type` in the canonical
+  envelope); defaults to `SOURCE_ENTITY` if omitted.
+- `canonical`: `{attribute key: dotted source path}` -> becomes
+  `entity.attributes`.
+- `relationships` (optional): declarative edges referencing keys already
+  produced under `canonical`, or the literal `"entity_id"`. A relationship
+  only materializes in Neo4j once **both** endpoints have themselves been
+  ingested as their own entities with matching IDs.
+
 Run:
 
 ```powershell
 python -m ingestion.generic_rest
 python -m transformation.preprocess
 python -m transformation.normalize
+python -m upsert_merge
 ```
 
 The generic connector writes every API object unchanged to `raw.api_records`
-with a batch ID and source record ID. The canonical mapping is an external
-input to this repository: provide the mapping implementation or generated
-mapping artifact at the staging-to-canonical boundary. This repository does
-not infer business semantics or invent mappings; it guarantees that the
-source payload, identifiers, batch metadata, and extraction metadata are
-available for the supplied canonical map.
+(via MinIO and Parquet when configured) with a batch ID and source record ID.
+Preprocessing applies your mapping; normalization validates the result
+against your canonical JSON Schema; the upsert step writes one Neo4j node per
+record under the label from `entity_type`, plus any declared relationships.
 
 ### Runtime canonical schema
 
@@ -288,8 +343,7 @@ normalization instead of being published as valid canonical data. See
 
 ### Ingestion
 
-`ingestion/generic_rest.py` (the default connector, used for Shippo and any
-other REST source):
+`ingestion/generic_rest.py` (the default connector, used for any REST source):
 
 - Generates a new UUID batch per run.
 - Lands the raw response in the MinIO `otc-raw` bucket when `MINIO_ENDPOINT`
@@ -301,10 +355,8 @@ other REST source):
 
 ### Preprocessing and enrichment
 
-`transformation/preprocess.py` selects successful Shippo shipments that have
-not already been staged. It joins a matching transaction response by shipment
-ID, adds a deterministic fallback tracking number (`shp_000001` style), and
-stores this structure:
+`transformation/preprocess.py` selects successful raw records that have not
+already been staged, and stores this structure:
 
 ```json
 {
@@ -314,56 +366,53 @@ stores this structure:
 }
 ```
 
-`transformation/enrichment.py` derives or supplies the attributes used by the
-canonical contract, including:
+When `SOURCE_MAPPING_PATH` (or the Streamlit mapping field) is configured,
+`enriched_attributes` comes from `transformation/generic_mapper.py`:
+entirely declarative, producing `entity_id`, `entity_type`, `attributes`, and
+`relationships` from your mapping config. No entity shape is assumed here;
+the mapping alone decides what the record becomes.
 
-- customer tier, order value, priority, and SLA state;
-- tracking number, dwell time, and arrival ETA;
-- facility identity, region, coordinates, throughput, and status;
-- carrier and delivery-partner metrics;
-- route IDs, route name, and risk score;
-- an initial shipment event and SHA-256 audit hash.
-
-Values that come from Shippo are kept distinct from synthetic benchmark
-values. When Shippo does not provide origin coordinates or a tracking number,
-the implementation uses deterministic fallback values.
+When no mapping is configured, preprocessing falls back to
+`transformation/enrichment.py`, a legacy demo enrichment path that derives
+shipment-shaped attributes (customer tier, order value, tracking number,
+facility, carrier, route, event) with deterministic synthetic fallbacks. This
+fallback exists only so the pipeline is runnable out of the box; real usage
+should supply a mapping.
 
 ### Normalization
 
 `transformation/normalize.py`:
 
 1. Trims string values recursively.
-2. Builds the fixed `otc.v1` envelope with metadata, entity attributes,
-   relationships, and derived fields.
+2. Builds the canonical envelope: `schema_version`, `metadata`,
+   `entity.type`/`entity.id`/`entity.attributes`, top-level `relationships`,
+   and `derived` fields. When a mapping was used, `entity.type` and
+   `relationships` come directly from the mapping's output; the legacy
+   fallback path uses a fixed `shipment` entity type and a single `SHIPS_TO`
+   relationship instead.
 3. Removes the lowest and highest 1% for each numeric field when a batch is
    large enough to have a non-zero 1% trim count.
-4. Inserts only records not already present in the canonical table.
-
-The canonical entity is a shipment and includes a `SHIPS_TO` relationship from
-the origin address ID to the destination address ID.
+4. Validates the result against `CANONICAL_SCHEMA_PATH` when configured.
+5. Inserts only records not already present in the canonical table.
 
 ## Provenance contract
 
 [`transformation/field_provenance.yaml`](transformation/field_provenance.yaml)
-classifies fields as:
+documents field origins for the legacy demo enrichment path only (used when
+no mapping is configured). It classifies fields as:
 
-- `API-SOURCED`: copied from a Shippo response;
+- `API-SOURCED`: copied unchanged from the source response;
 - `DERIVED`: calculated from source or other pipeline fields;
 - `SYNTHETIC`: generated for this demonstration and not claimed to be
-  Shippo-provided.
+  source-provided.
 
-Examples include Shippo rate provider and zone fields as API-sourced,
-estimated delivery as derived, and reliability or capacity benchmarks as
-synthetic. Update this file whenever enrichment rules or field origins change.
+When you supply your own mapping, provenance is whatever your `canonical`
+mapping declares as sourced from the payload; this file does not apply.
 
 ## Resetting data
 
-The Streamlit **Ingest from Shippo** action calls
-`reset_pipeline_data()` first and deletes canonical, staging, and raw rows.
-This is intentional for a clean demonstration batch. Do not use that control
-against a shared or production database.
-
-To reset manually:
+There is no built-in "clear and reingest" control in the current pipeline;
+runs are idempotent per `batch_id` instead. To reset manually:
 
 ```sql
 DELETE FROM canonical.otc_records;
@@ -371,18 +420,25 @@ DELETE FROM staging.preprocessed_records;
 DELETE FROM raw.api_records;
 ```
 
+Do not run this against a shared or production database.
+
 ## Troubleshooting
 
 - **`Set DATABASE_URL before ...`**: define `DATABASE_URL` in the same shell
   used to start Streamlit or the CLI.
-- **`Set SHIPPO_API_TOKEN before ingesting.`**: define a valid Shippo test-mode
-  token. Never use a production token for this test workflow.
-- **Shippo rejects the request**: verify the token, test-mode account, request
-  addresses/parcels, and returned rates.
-- **No staging rows appear**: confirm raw shipment rows have
+- **Missing Neo4j env vars**: define `NEO4J_URI`, `NEO4J_USERNAME`, and
+  `NEO4J_PASSWORD`.
+- **MinIO connection errors**: confirm the MinIO container/service is running
+  and `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY` are correct.
+- **Canonical schema validation failed**: your mapping's `canonical` output
+  does not match the `required`/`properties` in the JSON Schema you supplied;
+  update one to match the other.
+- **Relationship missing in the graph**: both endpoints of a declared
+  relationship must exist as their own ingested entities with matching IDs;
+  check `relationships_skipped_missing_endpoint` in the upsert result.
+- **No staging rows appear**: confirm raw rows have
   `ingestion_status = 'SUCCESS'` and that the three schema scripts ran.
-- **No canonical rows appear**: normalize only after preprocessing and use the
-  **Normalize to otc.v1** control.
+- **No canonical rows appear**: normalize only after preprocessing.
 - **PostgreSQL connection errors**: verify that PostgreSQL is running and that
   the connection string points to the correct database and credentials.
 
