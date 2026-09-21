@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -184,22 +185,18 @@ def render_network_graph(node_payload: list[dict[str, Any]], edges: list[dict[st
     st.pyplot(fig)
 
 
-def run_custom_api_graph_pipeline(
+def run_api_graph_pipeline(
     api_url: str,
     token: str,
+    id_field: str,
     mapping_text: str,
     canonical_text: str,
-    *,
-    source_system: str,
-    source_entity: str,
-    record_id_field: str,
-    records_path: str,
-    auth_prefix: str,
-    max_records: int,
 ) -> dict[str, Any]:
-    connection_string = os.getenv("DATABASE_URL")
-    if not connection_string:
-        raise RuntimeError("DATABASE_URL is required for custom API ingestion.")
+    """Ingest one REST API through the default MinIO->Parquet->Postgres->Neo4j
+    pipeline. source_system/source_entity are derived from the mapping so the
+    form only needs to ask for what actually varies between sources."""
+    if not os.getenv("DATABASE_URL"):
+        raise RuntimeError("DATABASE_URL is required for API ingestion.")
 
     mapping = json.loads(mapping_text)
     canonical_schema = json.loads(canonical_text)
@@ -207,6 +204,8 @@ def run_custom_api_graph_pipeline(
         raise ValueError("The mapping must be a JSON object.")
     if not isinstance(canonical_schema, dict):
         raise ValueError("The canonical schema must be a JSON object.")
+
+    source_entity = str(mapping.get("entity_type") or "record").lower()
 
     previous_mapping_path = os.environ.get("SOURCE_MAPPING_PATH")
     previous_schema_path = os.environ.get("CANONICAL_SCHEMA_PATH")
@@ -218,38 +217,22 @@ def run_custom_api_graph_pipeline(
         os.environ["SOURCE_MAPPING_PATH"] = str(mapping_path)
         os.environ["CANONICAL_SCHEMA_PATH"] = str(schema_path)
         try:
-            normalized_api_url = api_url.strip()
-            markdown_url = re.fullmatch(r"(?:API URL:\s*)?\[[^]]+\]\((https?://[^)]+)\)", normalized_api_url)
-            if markdown_url:
-                normalized_api_url = markdown_url.group(1)
-            elif normalized_api_url.lower().startswith("api url:"):
-                normalized_api_url = normalized_api_url.split(":", 1)[1].strip()
-            if not normalized_api_url.startswith(("http://", "https://")):
-                raise ValueError("API URL must be a plain http:// or https:// URL, without labels or Markdown.")
-            normalized_api_url = normalized_api_url.rstrip("/")
-            if normalized_api_url == "https://api.goshippo.com":
-                normalized_api_url += "/shipments/"
-            normalized_token = token.strip()
-            token_prefix = f"{auth_prefix.strip()} "
-            if normalized_token.lower().startswith(token_prefix.lower()):
-                normalized_token = normalized_token[len(token_prefix):].strip()
+            config: dict[str, Any] = {
+                "endpoint": api_url.strip(),
+                "source_system": "api",
+                "source_entity": source_entity,
+                "record_id_field": id_field.strip(),
+                "response": {"records_path": ""},
+            }
+            if token.strip():
+                config["auth"] = {
+                    "type": "bearer",
+                    "token": token.strip(),
+                    "header": "Authorization",
+                    "prefix": "Bearer",
+                }
             # Default pipeline: MinIO landing -> Parquet -> Postgres -> Neo4j, via Prefect.
-            return otc_pipeline_flow(
-                config={
-                    "endpoint": normalized_api_url,
-                    "source_system": source_system,
-                    "source_entity": source_entity,
-                    "record_id_field": record_id_field,
-                    "response": {"records_path": records_path},
-                    "auth": {
-                        "type": "bearer",
-                        "token": normalized_token,
-                        "header": "Authorization",
-                        "prefix": auth_prefix,
-                    },
-                },
-                max_records=max_records,
-            )
+            return otc_pipeline_flow(config=config)
         finally:
             if previous_mapping_path is None:
                 os.environ.pop("SOURCE_MAPPING_PATH", None)
@@ -268,36 +251,15 @@ st.caption("REST API -> PostgreSQL raw/staging/canonical -> Neo4j AuraDB final g
 with st.sidebar:
     st.header("Pipeline controls")
 
-    st.subheader("Custom REST API")
-    custom_api_url = st.text_input("API URL", placeholder="https://api.example.com/shipments")
-    custom_api_token = st.text_input("API token", type="password")
-    custom_max_records = st.number_input(
-        "Maximum records per run",
-        min_value=1,
-        max_value=100000,
-        value=100,
-        step=1,
-        help="Only the first N records returned by the API will be ingested.",
-    )
-    custom_auth_prefix = st.text_input(
-        "API token prefix",
-        value="Bearer",
-        help="Use ShippoToken for Shippo, or Bearer for most APIs.",
-    )
-    custom_source_system = st.text_input("Source system", value="custom_api")
-    custom_source_entity = st.text_input("Source entity", value="shipments")
-    custom_record_id_field = st.text_input("Record ID field", value="id")
-    custom_records_path = st.text_input(
-        "Records path (optional)",
-        placeholder="data.items",
-        help="Use a dotted path when the API wraps records, for example data.items.",
-    )
-    custom_mapping = st.text_area(
-        "Source-to-canonical mapping JSON",
+    api_url = st.text_input("API endpoint URL", placeholder="https://api.example.com/orders")
+    api_token = st.text_input("API token", type="password")
+    id_field = st.text_input("ID field (primary key)", placeholder="id")
+    mapping_text = st.text_area(
+        "Mapping JSON",
         height=220,
-        placeholder='{"source": {"entity_id": "id"}, "canonical": {"shipment.shipment_id": "id"}}',
+        placeholder='{"source": {"entity_id": "id"}, "entity_type": "Order", "canonical": {"amount": "totals.due"}}',
     )
-    custom_canonical = st.text_area(
+    canonical_text = st.text_area(
         "Canonical JSON Schema",
         height=220,
         placeholder='{"type": "object", "required": ["schema_version", "metadata", "entity"]}',
@@ -305,13 +267,10 @@ with st.sidebar:
 
     if st.button("Map API -> Postgres -> Neo4j", type="primary"):
         required_values = {
-            "API URL": custom_api_url.strip(),
-            "API token": custom_api_token.strip(),
-            "Source system": custom_source_system.strip(),
-            "Source entity": custom_source_entity.strip(),
-            "Record ID field": custom_record_id_field.strip(),
-            "Mapping JSON": custom_mapping.strip(),
-            "Canonical JSON Schema": custom_canonical.strip(),
+            "API endpoint URL": api_url.strip(),
+            "ID field": id_field.strip(),
+            "Mapping JSON": mapping_text.strip(),
+            "Canonical JSON Schema": canonical_text.strip(),
         }
         missing = [label for label, value in required_values.items() if not value]
         if missing:
@@ -319,23 +278,43 @@ with st.sidebar:
         else:
             try:
                 with st.spinner("Fetching, mapping, normalizing, and upserting the graph..."):
-                    counts = run_custom_api_graph_pipeline(
-                        custom_api_url.strip(),
-                        custom_api_token.strip(),
-                        custom_mapping,
-                        custom_canonical,
-                        source_system=custom_source_system.strip(),
-                        source_entity=custom_source_entity.strip(),
-                        record_id_field=custom_record_id_field.strip(),
-                        records_path=custom_records_path.strip(),
-                        auth_prefix=custom_auth_prefix.strip(),
-                        max_records=int(custom_max_records),
-                    )
-                st.success(f"Custom API pipeline complete: {counts}")
+                    counts = run_api_graph_pipeline(api_url, api_token, id_field, mapping_text, canonical_text)
+                st.success(f"Pipeline complete: {counts}")
             except json.JSONDecodeError as exc:
                 st.error(f"Mapping or canonical input is not valid JSON: {exc}")
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Custom API pipeline failed: {exc}")
+                st.error(f"Pipeline failed: {exc}")
+
+with st.expander("Demo: run the synthetic P2P test pipeline"):
+    st.caption(
+        "Runs the standalone run_p2p_pipeline.py harness (generate synthetic "
+        "PR/PO/ASN/GR/Invoice/Payment cases, serve them locally, then ingest each "
+        "in dependency order and upsert to Neo4j). This is a fixed test scenario, "
+        "kept separate from the generic API form above."
+    )
+    demo_cases = st.number_input("Cases", min_value=1, max_value=5000, value=120, step=1)
+    demo_anomaly_rate = st.slider("Anomaly rate (inflated stage duration)", 0.0, 1.0, 0.15)
+    demo_seed = st.number_input("Seed (0 = random)", min_value=0, max_value=999999, value=42, step=1)
+    demo_wipe = st.checkbox("Wipe previous P2P_ERP rows first", value=True)
+
+    if st.button("Run P2P pipeline"):
+        try:
+            from run_p2p_pipeline import run_pipeline
+
+            log = io.StringIO()
+            with st.spinner("Running PR -> PO -> ASN -> GR -> Invoice -> Payment..."):
+                with contextlib.redirect_stdout(log):
+                    run_pipeline(
+                        cases=int(demo_cases),
+                        process="P2P",
+                        anomaly_rate=float(demo_anomaly_rate),
+                        wipe=demo_wipe,
+                        seed=int(demo_seed) or None,
+                    )
+            st.success("P2P demo pipeline complete.")
+            st.code(log.getvalue())
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"P2P demo pipeline failed: {exc}")
 
 try:
     node_payload, edges = fetch_graph_snapshot(limit=200)

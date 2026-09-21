@@ -1,0 +1,19 @@
+{
+  "entity_type": "ASN",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "asn_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "company_code": "company",
+    "plant_id": "plant",
+    "supplier_id": "supplier_code",
+    "created_at": "asn_created_ts",
+    "po_id": "po_ref"
+  },
+  "relationships": [
+    {"type": "FOLLOWS", "from": "entity_id", "to": "po_id"}
+  ]
+}

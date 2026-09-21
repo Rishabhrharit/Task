@@ -1,0 +1,227 @@
+{
+  "_description": "One real example case from the GENERIC canonical output of reshape_to_canonical.py --process otd (ProcessCase / ProcessNode / ProcessEdge / ProcessEvent shape) -- built from the OTD-native generator variant, so events are real audit-trail records (LABEL_CREATED/PICKED/GATE_OUT/IN_TRANSIT/GATE_IN), each with its own attributes. BUSINESS_OBJECT nodes: ORDER, SHIPMENT; MASTER_DATA nodes shown: CARRIER, FACILITY.",
+  "case": {
+    "case_id": "OTD::order_000001",
+    "process_type": "OTD",
+    "root_node_id": "OTD::order_000001::ROOT",
+    "status": "OPEN",
+    "opened_at": "2026-04-24",
+    "last_event_time": "2026-04-17T01:19:49.015955+00:00"
+  },
+  "nodes": [
+    {
+      "node_id": "OTD::order_000001::ORDER::order_000001",
+      "case_id": "OTD::order_000001",
+      "parent_node_id": "OTD::order_000001::ROOT",
+      "node_type": "BUSINESS_OBJECT",
+      "node_subtype": "ORDER",
+      "entity_type": "ORDER",
+      "entity_id": "order_000001",
+      "status": "Critical",
+      "attributes": {
+        "batch_id": "synth_20260825T174035Z_seed7",
+        "erp_source": "ORACLE",
+        "customer_tier": "Gold",
+        "order_value_usd": 6996.51,
+        "original_promise_dt": "2026-04-24",
+        "target_delivery_dt": "2026-04-24",
+        "estimated_delivery_dt": "2026-04-19",
+        "order_priority": 46,
+        "sla_health": "Critical"
+      }
+    },
+    {
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "case_id": "OTD::order_000001",
+      "parent_node_id": "OTD::order_000001::ROOT",
+      "node_type": "BUSINESS_OBJECT",
+      "node_subtype": "SHIPMENT",
+      "entity_type": "SHIPMENT",
+      "entity_id": "S_000001",
+      "status": null,
+      "attributes": {
+        "batch_id": "synth_20260825T174035Z_seed7",
+        "order_id": "order_000001",
+        "carrier_id": "DHLG",
+        "facility_id": "Facility_0004",
+        "route_id": "Facility_0004__Facility_0019",
+        "partner_id": "P_0002",
+        "tracking_number": "TRK647868021944",
+        "dwell_time_sigma": 0.0477,
+        "arrival_eta": "2026-04-18T03:38:59.283200+00:00"
+      }
+    },
+    {
+      "node_id": "OTD::order_000001::ROOT",
+      "case_id": "OTD::order_000001",
+      "parent_node_id": null,
+      "node_type": "CASE_ROOT",
+      "node_subtype": "OTD",
+      "entity_type": null,
+      "entity_id": null,
+      "status": "OPEN",
+      "attributes": {}
+    },
+    {
+      "node_id": "MASTER::CARRIER::DHLG",
+      "case_id": null,
+      "parent_node_id": null,
+      "node_type": "MASTER_DATA",
+      "node_subtype": "CARRIER",
+      "entity_type": "CARRIER",
+      "entity_id": "DHLG",
+      "status": "ACTIVE",
+      "attributes": {
+        "batch_id": "synth_20260825T174035Z_seed7",
+        "carrier_name": "DHL",
+        "reliability_idx": 91.29,
+        "cost_volatility": -0.41
+      }
+    },
+    {
+      "node_id": "MASTER::FACILITY::Facility_0004",
+      "case_id": null,
+      "parent_node_id": null,
+      "node_type": "MASTER_DATA",
+      "node_subtype": "FACILITY",
+      "entity_type": "FACILITY",
+      "entity_id": "Facility_0004",
+      "status": "ACTIVE",
+      "attributes": {
+        "batch_id": "synth_20260825T174035Z_seed7",
+        "facility_type": "DC",
+        "facility_name": "Columbus Logistics Hub",
+        "region_id": "Z_013",
+        "geo_point": {
+          "lat": 26.484689,
+          "lon": -90.624139
+        },
+        "throughput_z": -0.9677,
+        "status_flag": "Normal"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "OTD::order_000001::CONTAINS::OTD::order_000001::ROOT::OTD::order_000001::ORDER::order_000001",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::ROOT",
+      "to_node_id": "OTD::order_000001::ORDER::order_000001",
+      "relationship_type": "CONTAINS"
+    },
+    {
+      "edge_id": "OTD::order_000001::CONTAINS::OTD::order_000001::ROOT::OTD::order_000001::SHIPMENT::S_000001",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::ROOT",
+      "to_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "relationship_type": "CONTAINS"
+    },
+    {
+      "edge_id": "OTD::order_000001::FULFILLS::OTD::order_000001::SHIPMENT::S_000001::OTD::order_000001::ORDER::order_000001",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "to_node_id": "OTD::order_000001::ORDER::order_000001",
+      "relationship_type": "FULFILLS"
+    },
+    {
+      "edge_id": "OTD::order_000001::VIA_CARRIER::OTD::order_000001::SHIPMENT::S_000001::MASTER::CARRIER::DHLG",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "to_node_id": "MASTER::CARRIER::DHLG",
+      "relationship_type": "VIA_CARRIER"
+    },
+    {
+      "edge_id": "OTD::order_000001::FROM_FACILITY::OTD::order_000001::SHIPMENT::S_000001::MASTER::FACILITY::Facility_0004",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "to_node_id": "MASTER::FACILITY::Facility_0004",
+      "relationship_type": "FROM_FACILITY"
+    },
+    {
+      "edge_id": "OTD::order_000001::USES_ROUTE::OTD::order_000001::SHIPMENT::S_000001::MASTER::ROUTE::Facility_0004__Facility_0019",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "to_node_id": "MASTER::ROUTE::Facility_0004__Facility_0019",
+      "relationship_type": "USES_ROUTE"
+    },
+    {
+      "edge_id": "OTD::order_000001::DELIVERED_BY::OTD::order_000001::SHIPMENT::S_000001::MASTER::DELIVERYPARTNER::P_0002",
+      "case_id": "OTD::order_000001",
+      "from_node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "to_node_id": "MASTER::DELIVERYPARTNER::P_0002",
+      "relationship_type": "DELIVERED_BY"
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e2c60fbd-5f02-4fa6-b266-1134669d7388",
+      "case_id": "OTD::order_000001",
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "event_type": "LABEL_CREATED",
+      "event_time": "2026-04-16T09:27:00+00:00",
+      "attributes": {
+        "delta_t_hrs": 0.0,
+        "location_id": "Facility_0004",
+        "location_kind": "FACILITY",
+        "exception_reason": null,
+        "audit_hash": "2aaba09708b08a0b1e42b9928351f145dc575addf688d8385cd060c5be47e185"
+      }
+    },
+    {
+      "event_id": "258ecaa7-82ad-4434-9294-b7feddb6099e",
+      "case_id": "OTD::order_000001",
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "event_type": "PICKED",
+      "event_time": "2026-04-16T11:45:51.634839+00:00",
+      "attributes": {
+        "delta_t_hrs": 2.3143,
+        "location_id": "Facility_0004",
+        "location_kind": "FACILITY",
+        "exception_reason": null,
+        "audit_hash": "7f9725ba1cfbb72b597330b6658a0cdd3a42ceee02ee8cc86db792841007e061"
+      }
+    },
+    {
+      "event_id": "3c9ca444-7a5e-47e6-8e6b-0b9bb081da82",
+      "case_id": "OTD::order_000001",
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "event_type": "GATE_OUT",
+      "event_time": "2026-04-16T14:16:17.290141+00:00",
+      "attributes": {
+        "delta_t_hrs": 2.5071,
+        "location_id": "Facility_0004",
+        "location_kind": "FACILITY",
+        "exception_reason": null,
+        "audit_hash": "2c732269d048a89fb228f2a4cdaa91f9d26c888b350861b758f9a65802f2db88"
+      }
+    },
+    {
+      "event_id": "2c2b7745-2cd1-469e-8ecc-8dd9f1c98869",
+      "case_id": "OTD::order_000001",
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "event_type": "IN_TRANSIT",
+      "event_time": "2026-04-16T23:18:42.721211+00:00",
+      "attributes": {
+        "delta_t_hrs": 9.0404,
+        "location_id": "Facility_0004__Facility_0019",
+        "location_kind": "ROUTE",
+        "exception_reason": null,
+        "audit_hash": "d43135836a59734e55df5bab7b78926f9adea89d4950ac63113deaa4df7604fb"
+      }
+    },
+    {
+      "event_id": "9c5d4427-7436-45c5-9117-4237bd6ac9f4",
+      "case_id": "OTD::order_000001",
+      "node_id": "OTD::order_000001::SHIPMENT::S_000001",
+      "event_type": "GATE_IN",
+      "event_time": "2026-04-17T01:19:49.015955+00:00",
+      "attributes": {
+        "delta_t_hrs": 2.0184,
+        "location_id": "Facility_0019",
+        "location_kind": "FACILITY",
+        "exception_reason": null,
+        "audit_hash": "cd1087a34a90091ebca5771795253d162cf86b0ca04eff84cd03f6faa091e5d1"
+      }
+    }
+  ]
+}

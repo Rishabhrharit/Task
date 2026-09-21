@@ -1,0 +1,23 @@
+{
+  "entity_type": "INVOICE",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "invoice_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "company_code": "company",
+    "plant_id": "plant",
+    "amount": "amount_usd",
+    "currency": "currency",
+    "invoice_date": "invoice_dt",
+    "posted_at": "posted_ts",
+    "po_id": "po_ref",
+    "gr_id": "gr_ref"
+  },
+  "relationships": [
+    {"type": "MATCHED_TO", "from": "entity_id", "to": "po_id"},
+    {"type": "MATCHED_TO", "from": "entity_id", "to": "gr_id"}
+  ]
+}

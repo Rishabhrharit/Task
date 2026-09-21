@@ -1,0 +1,21 @@
+{
+  "parameters": {
+    "process_type": "O2C",
+    "zscore_threshold": 2.0
+  },
+  "miner": {
+    "sequence": {
+      "algorithm": "prefixspan",
+      "min_support": 5,
+      "max_len": 4,
+      "min_length": 2
+    }
+  },
+  "queries": [
+    {
+      "name": "o2c_case_sequences",
+      "purpose": "Computes real per-stage duration (ORDER_QUEUE/FULFILLMENT_DWELL/CARRIER_TRANSIT/BILLING_SETTLEMENT, from ORDER/SHIPMENT/INVOICE/PAYMENT timestamps) for every case, then z-scores each duration against its OWN stage's mean/stdev (avg()/stDevP(), both built into Cypher -- same z-score check anomaly_engine.py does, just computed here directly instead of imported). Cases with ANY stage z-score >= $zscore_threshold count as delayed; their full event_type sequence, sorted by event_time, is returned. Feeds PrefixSpan.",
+      "cypher": "CALL {\n  MATCH (o:Entity:BUSINESS_OBJECT:ORDER {process: $process_type})\n  WHERE o.order_date IS NOT NULL AND o.allocated_at IS NOT NULL\n  RETURN o.case_id AS case_id, 'ORDER_QUEUE' AS stage,\n         toFloat(duration.inSeconds(datetime(o.order_date), datetime(o.allocated_at)).seconds) AS dwell_seconds\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.pick_started_at IS NOT NULL AND s.shipped_at IS NOT NULL\n  RETURN s.case_id AS case_id, 'FULFILLMENT_DWELL' AS stage,\n         toFloat(duration.inSeconds(datetime(s.pick_started_at), datetime(s.shipped_at)).seconds) AS dwell_seconds\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.shipped_at IS NOT NULL AND s.delivered_at IS NOT NULL\n  RETURN s.case_id AS case_id, 'CARRIER_TRANSIT' AS stage,\n         toFloat(duration.inSeconds(datetime(s.shipped_at), datetime(s.delivered_at)).seconds) AS dwell_seconds\n\n  UNION ALL\n\n  MATCH (inv:Entity:BUSINESS_OBJECT:INVOICE {process: $process_type})\n  MATCH (pay:Entity:BUSINESS_OBJECT:PAYMENT {case_id: inv.case_id})\n  WHERE inv.posted_at IS NOT NULL AND pay.cleared_at IS NOT NULL\n  RETURN inv.case_id AS case_id, 'BILLING_SETTLEMENT' AS stage,\n         toFloat(duration.inSeconds(datetime(inv.posted_at), datetime(pay.cleared_at)).seconds) AS dwell_seconds\n}\nWITH stage, collect({case_id: case_id, dwell: dwell_seconds}) AS rows,\n     avg(dwell_seconds) AS stage_mean, stDevP(dwell_seconds) AS stage_std\nUNWIND rows AS r\nWITH r.case_id AS case_id, r.dwell AS dwell, stage_mean, stage_std\nWHERE stage_std > 0 AND (dwell - stage_mean) / stage_std >= $zscore_threshold\nWITH collect(DISTINCT case_id) AS delayed_case_ids\nMATCH (ev:EVENT {process: $process_type})\nWHERE ev.case_id IN delayed_case_ids\nWITH ev ORDER BY ev.case_id, ev.event_time ASC\nWITH ev.case_id AS case_id, collect(ev.event_type) AS sequence\nRETURN case_id, sequence"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "entity_type": "PO",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "po_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "company_code": "company",
+    "plant_id": "plant",
+    "supplier_id": "supplier_code",
+    "material_id": "material_code",
+    "amount": "amount_usd",
+    "currency": "currency",
+    "created_at": "po_created_ts",
+    "issued_at": "po_issued_ts",
+    "pr_id": "pr_ref"
+  },
+  "relationships": [
+    {"type": "GENERATED_FROM", "from": "entity_id", "to": "pr_id"}
+  ]
+}

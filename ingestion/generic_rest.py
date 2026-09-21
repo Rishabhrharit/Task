@@ -176,8 +176,23 @@ def ingest_from_config(
     connection = database_connection()
     try:
         with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (source_record_id) source_record_id, payload
+                FROM raw.api_records
+                WHERE source_system = %s AND source_entity = %s
+                ORDER BY source_record_id, extracted_at DESC
+                """,
+                (source_system, source_entity),
+            )
+            latest_payloads = {row[0]: row[1] for row in cursor.fetchall()}
+
+            inserted = 0
             for record in records:
-                source_record_id = record.get(id_field)
+                source_record_id = str(record.get(id_field))
+                previous = latest_payloads.get(source_record_id)
+                if previous is not None and json.dumps(previous, sort_keys=True) == json.dumps(record, sort_keys=True):
+                    continue  # unchanged since the last ingest; nothing new to land
                 cursor.execute(
                     """
                     INSERT INTO raw.api_records (
@@ -190,13 +205,15 @@ def ingest_from_config(
                         batch_id,
                         source_system,
                         source_entity,
-                        str(source_record_id),
+                        source_record_id,
                         datetime.now(timezone.utc),
                         psycopg2.extras.Json(record),
                         "SUCCESS",
                     ),
                 )
+                inserted += 1
         connection.commit()
+        print(f"Generic ingestion: {inserted} new/changed of {len(records)} fetched records landed under batch {batch_id}")
     except (psycopg2.Error, ValueError, KeyError) as error:
         connection.rollback()
         raise RuntimeError(f"Generic ingestion failed: {error}") from error

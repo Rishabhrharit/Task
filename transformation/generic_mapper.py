@@ -96,6 +96,8 @@ def map_payload_to_canonical(
             {"type": "REL_TYPE", "from": "attr.path", "to": "attr.path"}
         where "from"/"to" reference keys already produced under "canonical"
         (or the literal "entity_id").
+      - "literals": optional {attribute key: constant value}, for fields with
+        no source field (e.g. a fixed process/process_type tag).
       - "schema_version": optional override for the canonical envelope version.
     """
     source_map = mapping.get("source", {})
@@ -109,7 +111,7 @@ def map_payload_to_canonical(
         "UNKNOWN_ENTITY",
     )
 
-    attributes: dict[str, Any] = {}
+    attributes: dict[str, Any] = dict(mapping.get("literals") or {})
     for canonical_key, source_path in canonical_shape.items():
         value = resolve_path(payload, source_path)
         if value is None:

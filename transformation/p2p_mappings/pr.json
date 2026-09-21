@@ -1,0 +1,21 @@
+{
+  "entity_type": "PR",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "requisition_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "company_code": "company",
+    "plant_id": "plant",
+    "supplier_id": "supplier_code",
+    "material_id": "material_code",
+    "amount": "amount_usd",
+    "currency": "currency",
+    "created_at": "req_date",
+    "submitted_at": "submit_ts",
+    "approved_at": "approve_ts"
+  },
+  "relationships": []
+}

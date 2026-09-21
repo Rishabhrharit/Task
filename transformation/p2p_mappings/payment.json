@@ -1,0 +1,21 @@
+{
+  "entity_type": "PAYMENT",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "payment_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "amount": "amount_usd",
+    "currency": "currency",
+    "payment_date": "payment_ts",
+    "cleared_at": "cleared_ts",
+    "invoice_id": "invoice_ref",
+    "po_id": "po_ref"
+  },
+  "relationships": [
+    {"type": "SETTLES", "from": "entity_id", "to": "invoice_id"},
+    {"type": "REFERENCES", "from": "entity_id", "to": "po_id"}
+  ]
+}

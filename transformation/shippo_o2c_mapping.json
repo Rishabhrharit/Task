@@ -1,0 +1,30 @@
+{
+  "entity_type": "SHIPMENT",
+  "schema_version": "o2c.v1",
+  "source": {
+    "entity_id": "object_id"
+  },
+  "canonical": {
+    "case_id": "object_id",
+    "carrier_id": "rates.0.provider",
+    "shipment_amount": "rates.0.amount",
+    "currency_code": "rates.0.currency",
+    "shipped_at": "shipment_date",
+    "created_at": "object_created",
+    "updated_at": "object_updated",
+    "state_code": "status",
+    "warehouse_id": "address_from.object_id",
+    "region_code": "address_from.state",
+    "origin_city": "address_from.city",
+    "dest_region_code": "address_to.state",
+    "dest_city": "address_to.city",
+    "parcel_weight": "parcels.0.weight",
+    "parcel_mass_unit": "parcels.0.mass_unit"
+  },
+  "literals": {
+    "process": "O2C",
+    "node_subtype": "SHIPMENT",
+    "node_type": "BUSINESS_OBJECT"
+  },
+  "relationships": []
+}

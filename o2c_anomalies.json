@@ -1,0 +1,37 @@
+{
+  "parameters": {
+    "process_type": "O2C"
+  },
+  "detector": {
+    "methods": [
+      "zscore",
+      "iqr_upper_fence"
+    ],
+    "combine": "OR",
+    "tail": "upper",
+    "minimum_baseline_samples": 5,
+    "zscore": {
+      "threshold": 3.0,
+      "formula": "(metric_value - baseline_mean) / baseline_std",
+      "skip_when_standard_deviation_is_zero": true
+    },
+    "iqr": {
+      "multiplier": 1.5,
+      "formula": "q3 + multiplier * (q3 - q1)",
+      "flag_when": "metric_value > upper_fence"
+    },
+    "anomaly_condition": "zscore_flag == true OR iqr_flag == true"
+  },
+  "queries": [
+    {
+      "name": "o2c_baseline_observations",
+      "purpose": "Return raw duration samples across the whole O2C graph. The engine groups these rows by baseline_key and calculates count, mean, population standard deviation, Q1, Q3, IQR, and upper fence.",
+      "cypher": "CALL {\n  MATCH (ev:EVENT {process: $process_type})\n  WITH ev.case_id AS source_id, min(ev.event_time) AS start_t, max(ev.event_time) AS end_t\n  RETURN source_id,\n         'case_age_seconds' AS metric_name,\n         'CASE_LEAD_TIME' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(start_t), datetime(end_t)).seconds) AS sample_value\n\n  UNION ALL\n\n  MATCH (o:Entity:BUSINESS_OBJECT:ORDER {process: $process_type})\n  WHERE o.order_date IS NOT NULL AND o.allocated_at IS NOT NULL\n  RETURN o.case_id AS source_id,\n         'order_queue_seconds' AS metric_name,\n         'STAGE::ORDER_QUEUE' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(o.order_date), datetime(o.allocated_at)).seconds) AS sample_value\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.pick_started_at IS NOT NULL AND s.shipped_at IS NOT NULL\n  RETURN s.case_id AS source_id,\n         'fulfillment_seconds' AS metric_name,\n         'STAGE::FULFILLMENT_DWELL' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(s.pick_started_at), datetime(s.shipped_at)).seconds) AS sample_value\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.shipped_at IS NOT NULL AND s.delivered_at IS NOT NULL\n  RETURN s.case_id AS source_id,\n         'transit_seconds' AS metric_name,\n         'STAGE::CARRIER_TRANSIT' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(s.shipped_at), datetime(s.delivered_at)).seconds) AS sample_value\n\n  UNION ALL\n\n  MATCH (inv:Entity:BUSINESS_OBJECT:INVOICE {process: $process_type})\n  MATCH (pay:Entity:BUSINESS_OBJECT:PAYMENT {case_id: inv.case_id})\n  WHERE inv.posted_at IS NOT NULL AND pay.cleared_at IS NOT NULL\n  RETURN inv.case_id AS source_id,\n         'billing_seconds' AS metric_name,\n         'STAGE::BILLING_SETTLEMENT' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(inv.posted_at), datetime(pay.cleared_at)).seconds) AS sample_value\n}\nWITH *\nWHERE sample_value IS NOT NULL\nRETURN source_id, metric_name, baseline_key, sample_value"
+    },
+    {
+      "name": "o2c_candidate_metrics",
+      "purpose": "Return the same five duration measurements per case/entity that must be compared against their matching baseline distributions.",
+      "cypher": "CALL {\n  MATCH (ev:EVENT {process: $process_type})\n  WITH ev.case_id AS case_id, min(ev.event_time) AS start_t, max(ev.event_time) AS end_t\n  RETURN case_id,\n         'CASE' AS scope,\n         case_id AS record_id,\n         null AS entity_type,\n         null AS current_state,\n         'case_age_seconds' AS metric_name,\n         'CASE_LEAD_TIME' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(start_t), datetime(end_t)).seconds) AS metric_value\n\n  UNION ALL\n\n  MATCH (o:Entity:BUSINESS_OBJECT:ORDER {process: $process_type})\n  WHERE o.order_date IS NOT NULL AND o.allocated_at IS NOT NULL\n  RETURN o.case_id AS case_id,\n         'PROCESS_INSTANCE' AS scope,\n         o.entity_id AS record_id,\n         'ORDER' AS entity_type,\n         o.status AS current_state,\n         'order_queue_seconds' AS metric_name,\n         'STAGE::ORDER_QUEUE' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(o.order_date), datetime(o.allocated_at)).seconds) AS metric_value\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.pick_started_at IS NOT NULL AND s.shipped_at IS NOT NULL\n  RETURN s.case_id AS case_id,\n         'PROCESS_INSTANCE' AS scope,\n         s.entity_id AS record_id,\n         'SHIPMENT' AS entity_type,\n         s.status AS current_state,\n         'fulfillment_seconds' AS metric_name,\n         'STAGE::FULFILLMENT_DWELL' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(s.pick_started_at), datetime(s.shipped_at)).seconds) AS metric_value\n\n  UNION ALL\n\n  MATCH (s:Entity:BUSINESS_OBJECT:SHIPMENT {process: $process_type})\n  WHERE s.shipped_at IS NOT NULL AND s.delivered_at IS NOT NULL\n  RETURN s.case_id AS case_id,\n         'PROCESS_INSTANCE' AS scope,\n         s.entity_id AS record_id,\n         'SHIPMENT' AS entity_type,\n         s.status AS current_state,\n         'transit_seconds' AS metric_name,\n         'STAGE::CARRIER_TRANSIT' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(s.shipped_at), datetime(s.delivered_at)).seconds) AS metric_value\n\n  UNION ALL\n\n  MATCH (inv:Entity:BUSINESS_OBJECT:INVOICE {process: $process_type})\n  MATCH (pay:Entity:BUSINESS_OBJECT:PAYMENT {case_id: inv.case_id})\n  WHERE inv.posted_at IS NOT NULL AND pay.cleared_at IS NOT NULL\n  RETURN inv.case_id AS case_id,\n         'PROCESS_INSTANCE' AS scope,\n         inv.entity_id AS record_id,\n         'INVOICE' AS entity_type,\n         inv.status AS current_state,\n         'billing_seconds' AS metric_name,\n         'STAGE::BILLING_SETTLEMENT' AS baseline_key,\n         toFloat(duration.inSeconds(datetime(inv.posted_at), datetime(pay.cleared_at)).seconds) AS metric_value\n}\nWITH *\nWHERE metric_value IS NOT NULL\nRETURN case_id, scope, record_id, entity_type, current_state, metric_name, baseline_key, metric_value"
+    }
+  ]
+}

@@ -108,12 +108,58 @@ def _canonical_rows_from_postgres(
     return rows
 
 
+def _node_labels(entity_type: str, attributes: Dict[str, Any]) -> List[str]:
+    """Build the Entity:<node_type>:<entity_type> compound label scheme the
+    analytical Cypher (e.g. Entity:BUSINESS_OBJECT:ORDER) expects, instead of
+    a single bare label."""
+    node_type = _safe_label(attributes.get("node_type") or "BUSINESS_OBJECT", default="BUSINESS_OBJECT")
+    labels = ["Entity", node_type, entity_type]
+    seen: List[str] = []
+    for label in labels:
+        if label and label not in seen:
+            seen.append(label)
+    return seen
+
+
+def _derive_events(
+    attributes: Dict[str, Any], *, entity_type: str, entity_id: str, batch_id: str
+) -> List[Dict[str, Any]]:
+    """Derive one EVENT node per timestamp-like attribute (any key ending in
+    '_at' or '_date' with a non-empty string value). This is a generic,
+    naming-convention-driven derivation, not tied to any specific entity
+    shape: whatever the mapping's canonical output happens to name that way
+    becomes an event. case_id/process are carried over when the mapping
+    happens to produce them, since analytical queries commonly group events
+    by case."""
+    events: List[Dict[str, Any]] = []
+    case_id = attributes.get("case_id")
+    process = attributes.get("process")
+    for key, value in attributes.items():
+        if not isinstance(value, str) or not value:
+            continue
+        if not (key.endswith("_at") or key.endswith("_date")):
+            continue
+        events.append(
+            {
+                "event_id": f"{case_id or entity_id}::{entity_type}::{entity_id}::{key.upper()}",
+                "process": process,
+                "case_id": case_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "event_type": f"{entity_type}_{key.upper()}",
+                "event_time": value,
+                "batch_id": batch_id,
+            }
+        )
+    return events
+
+
 def _extract_node_and_relationships(
     row: Dict[str, Any],
-) -> tuple[str, Dict[str, Any], List[Dict[str, Any]]]:
-    """Turn one canonical row into a graph node plus its outgoing relationships,
-    driven entirely by entity.type/entity.id/entity.attributes and the
-    top-level relationships array. No entity shape is assumed."""
+) -> tuple[List[str], Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Turn one canonical row into a graph node plus its outgoing relationships
+    and derived events, driven entirely by entity.type/entity.id/entity.attributes
+    and the top-level relationships array. No entity shape is assumed."""
     payload = row.get("payload") or {}
     metadata = payload.get("metadata") or {}
     entity = payload.get("entity") or {}
@@ -125,6 +171,7 @@ def _extract_node_and_relationships(
     source_record_id = str(row.get("source_record_id") or metadata.get("source_record_id") or "")
     entity_id = str(entity.get("id") or source_record_id or f"RECORD::{row.get('id')}")
     entity_type = _safe_label(entity.get("type") or metadata.get("source_entity"))
+    labels = _node_labels(entity_type, attributes)
 
     node = {
         "id": entity_id,
@@ -150,13 +197,16 @@ def _extract_node_and_relationships(
             }
         )
 
-    return entity_type, node, relationships
+    events = _derive_events(attributes, entity_type=entity_type, entity_id=entity_id, batch_id=batch_id)
+
+    return labels, node, relationships, events
 
 
-def _node_cypher(label: str) -> str:
+def _node_cypher(labels: List[str]) -> str:
+    label_pattern = "".join(f"`{label}`:" for label in labels).rstrip(":")
     return f"""
     UNWIND $rows AS row
-    MERGE (n:`{label}` {{id: row.id}})
+    MERGE (n:{label_pattern} {{id: row.id}})
     SET n += row.attributes
     SET n.batch_id = row.batch_id, n.updated_at = $now
     RETURN count(n) AS written
@@ -179,6 +229,29 @@ def _relationship_cypher(rel_type: str) -> str:
 
 def _constraint_cypher(label: str) -> str:
     return f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:`{label}`) REQUIRE n.id IS UNIQUE"
+
+
+def _event_cypher() -> str:
+    return """
+    UNWIND $rows AS row
+    MERGE (ev:EVENT {event_id: row.event_id})
+    SET ev += row, ev.updated_at = $now
+    RETURN count(ev) AS written
+    """
+
+
+def _event_relationship_cypher() -> str:
+    # Links each derived EVENT back to the business-object node it came from,
+    # matched by entity_id/entity_type rather than a fixed relationship type
+    # per domain, so this stays generic across whatever gets ingested.
+    return """
+    UNWIND $rows AS row
+    MATCH (ev:EVENT {event_id: row.event_id})
+    MATCH (n {id: row.entity_id})
+    WHERE row.entity_type IN labels(n)
+    MERGE (ev)-[r:LOGGED_FOR]->(n)
+    RETURN count(r) AS written
+    """
 
 
 def _neo4j_driver():
@@ -220,14 +293,17 @@ def upsert_postgres_canonical_to_neo4j(
     if not rows:
         return {"nodes": 0, "relationships": 0, "labels": {}}
 
-    nodes_by_label: Dict[str, List[Dict[str, Any]]] = {}
+    nodes_by_label: Dict[tuple[str, ...], List[Dict[str, Any]]] = {}
     rels_by_type: Dict[str, List[Dict[str, Any]]] = {}
+    all_events: List[Dict[str, Any]] = []
 
     for row in rows:
-        entity_type, node, relationships = _extract_node_and_relationships(row)
-        nodes_by_label.setdefault(entity_type, []).append(_sanitize_neo4j_value(node, entity_type))
+        labels, node, relationships, events = _extract_node_and_relationships(row)
+        label_key = tuple(labels)
+        nodes_by_label.setdefault(label_key, []).append(_sanitize_neo4j_value(node, ":".join(labels)))
         for rel in relationships:
             rels_by_type.setdefault(rel["type"], []).append(_sanitize_neo4j_value(rel, rel["type"]))
+        all_events.extend(_sanitize_neo4j_value(event, "EVENT") for event in events)
 
     driver = _neo4j_driver()
     now = str(datetime.now(timezone.utc).isoformat())
@@ -237,14 +313,18 @@ def upsert_postgres_canonical_to_neo4j(
 
     try:
         with driver.session() as session:
-            for label in nodes_by_label:
-                session.run(_constraint_cypher(label))
-            for label, node_rows in nodes_by_label.items():
-                nodes_written_by_label[label] = _run_upsert_chunk(session, _node_cypher(label), node_rows, now)
+            for labels in nodes_by_label:
+                session.run(_constraint_cypher(labels[-1]))
+            for labels, node_rows in nodes_by_label.items():
+                nodes_written_by_label[":".join(labels)] = _run_upsert_chunk(
+                    session, _node_cypher(list(labels)), node_rows, now
+                )
             for rel_type, rel_rows in rels_by_type.items():
                 relationships_written_by_type[rel_type] = _run_upsert_chunk(
                     session, _relationship_cypher(rel_type), rel_rows, now
                 )
+            events_written = _run_upsert_chunk(session, _event_cypher(), all_events, now)
+            events_linked = _run_upsert_chunk(session, _event_relationship_cypher(), all_events, now)
     finally:
         driver.close()
 
@@ -255,6 +335,8 @@ def upsert_postgres_canonical_to_neo4j(
         "nodes": sum(nodes_written_by_label.values()),
         "relationships": relationships_written,
         "relationships_skipped_missing_endpoint": relationships_submitted - relationships_written,
+        "events": events_written,
+        "events_linked": events_linked,
         "labels": nodes_written_by_label,
     }
 
@@ -277,8 +359,8 @@ def main() -> None:
     if args.dry_run:
         sample = None
         if rows:
-            entity_type, node, relationships = _extract_node_and_relationships(rows[0])
-            sample = {"label": entity_type, "node": node, "relationships": relationships}
+            labels, node, relationships, events = _extract_node_and_relationships(rows[0])
+            sample = {"label": ":".join(labels), "node": node, "relationships": relationships, "events": events}
         print({
             "row_count": len(rows),
             "batch_id_filter": args.batch_id or "(all)",

@@ -1,0 +1,22 @@
+{
+  "entity_type": "GR",
+  "schema_version": "p2p.v1",
+  "source": {
+    "entity_id": "gr_no"
+  },
+  "canonical": {
+    "case_id": "case_ref",
+    "process": "process_type",
+    "company_code": "company",
+    "plant_id": "plant",
+    "material_id": "material_code",
+    "received_at": "gr_received_ts",
+    "validated_at": "gr_validated_ts",
+    "po_id": "po_ref",
+    "asn_id": "asn_ref"
+  },
+  "relationships": [
+    {"type": "FOLLOWS", "from": "entity_id", "to": "po_id"},
+    {"type": "RECEIVED_AGAINST", "from": "entity_id", "to": "asn_id"}
+  ]
+}
